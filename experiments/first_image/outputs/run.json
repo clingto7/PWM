@@ -1,0 +1,45 @@
+{
+  "input": "input.jpg",
+  "source_url": "https://simcruisegame.github.io/osds/images/release-2.1.0/01-mini-nebraska-roadside-chase.jpg",
+  "input_sha256": "2e26026659534abdc78c7d171061ce04561cb087a64666135eec4607e30506d9",
+  "image_size": [
+    1920,
+    1080
+  ],
+  "device": "cuda",
+  "torch": "2.6.0+cu124",
+  "transformers": "4.57.6",
+  "depth_model": "depth-anything/Depth-Anything-V2-Small-hf",
+  "depth_weight_sha256": "3152477ce0d8d6978d76b995120de97cb5b928701fd0f817769f59e249a16b70",
+  "sam_model": "facebook/sam2.1-hiera-tiny",
+  "sam_weight_sha256": "48c14467e5cf9e51870511feb72c89688e82dd74523142c0538b663e193ac2a7",
+  "outputs": {
+    "depth": {
+      "raw": "relative_depth.npy",
+      "preview": "relative_depth.png",
+      "shape": [
+        1080,
+        1920
+      ],
+      "min": -0.0445236936211586,
+      "max": 7.532406330108643,
+      "p01": 0.0,
+      "p99": 7.350807776451111,
+      "seconds": 0.36
+    },
+    "sam2": {
+      "raw": "sam2_masks.npz",
+      "preview": "sam2_overlay.png",
+      "method": "uniform point prompts; best IoU mask per point; IoU deduplication",
+      "preprocessing": "PIL bilinear resize to 1024x1024; ImageNet mean/std; point coordinates scaled independently to 1024",
+      "count": 19,
+      "raw_count": 144,
+      "shape": [
+        144,
+        256,
+        256
+      ],
+      "seconds": 0.76
+    }
+  }
+}

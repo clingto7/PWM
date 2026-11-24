@@ -1,0 +1,13 @@
+{
+  "model": "facebook/sam-3d-objects",
+  "implementation": "https://github.com/facebookresearch/sam-3d-objects",
+  "official_setup": "https://github.com/facebookresearch/sam-3d-objects/blob/main/doc/setup.md",
+  "planned_input": "input.jpg + car_input/car_mask.png",
+  "checkpoint_probe": "hf download facebook/sam-3d-objects --dry-run",
+  "checkpoint_probe_result": "Access denied: model requires approval",
+  "official_minimum_vram_gb": 32,
+  "available_gpu": "NVIDIA GeForce RTX 4090",
+  "available_vram_mib": 24564,
+  "inference_executed": false,
+  "output": null
+}

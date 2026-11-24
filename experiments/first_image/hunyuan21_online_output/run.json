@@ -1,0 +1,36 @@
+{
+  "source": "https://huggingface.co/spaces/tencent/Hunyuan3D-2.1",
+  "method": "official hosted Gradio Space /shape_generation",
+  "input": "car_input/car_rgba.png",
+  "input_sha256": "feec80a5ff7fd781d74c5d18de02d524e811b547c5386e5b72ec1f5e2892b722",
+  "params": {
+    "steps": 30,
+    "guidance_scale": 5.0,
+    "seed": 42,
+    "octree_resolution": 256,
+    "remove_background": false,
+    "num_chunks": 8000
+  },
+  "output": "car_shape.glb",
+  "output_sha256": "303a41ae28317222533c46707980be2d5ed1441b506e8c58585eaa183a28ade9",
+  "model_reported_faces": 324078,
+  "model_reported_vertices": 161703,
+  "model_reported_shape_seconds": 16.72,
+  "mesh_analysis": {
+    "watertight": true,
+    "connected_components": 5,
+    "bounds": [
+      [
+        -0.47495993971824646,
+        -0.3784309923648834,
+        -0.9982935190200806
+      ],
+      [
+        0.4661999046802521,
+        0.36890363693237305,
+        0.9900192022323608
+      ]
+    ],
+    "analysis_tool": "trimesh 4.4.7 on sentry"
+  }
+}

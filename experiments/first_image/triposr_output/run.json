@@ -1,0 +1,35 @@
+{
+  "input": "/home/simulator/ws/PWM/experiments/first_image/car_input/car_rgba.png",
+  "input_sha256": "feec80a5ff7fd781d74c5d18de02d524e811b547c5386e5b72ec1f5e2892b722",
+  "processed_input": "processed_input.png",
+  "processed_input_sha256": "1bb6bed6fe4652855dc82ca95d9b4d709f9d797179c534ac5d238c02fd6b755d",
+  "preprocess": "Official resize_foreground 0.85, alpha composite against gray 0.5",
+  "model": "stabilityai/TripoSR",
+  "implementation": "https://github.com/VAST-AI-Research/TripoSR",
+  "implementation_head_at_download": "107cefdc244c39106fa830359024f6a2f1c78871",
+  "weight_sha256": "429e2c6b22a0923967459de24d67f05962b235f79cde6b032aa7ed2ffcd970ee",
+  "seed": 42,
+  "mc_resolution": 256,
+  "chunk_size": 8192,
+  "vertex_colors": true,
+  "output": "car_shape.glb",
+  "output_sha256": "66f88c50256c7ea0de56082e9ac041e10e91d5159915ece69967b30d57669497",
+  "load_seconds": 2.67,
+  "inference_seconds": 1.86,
+  "vertices": 99723,
+  "faces": 199082,
+  "watertight": false,
+  "bounds": [
+    [
+      -0.39250168204307556,
+      -0.4793532192707062,
+      -0.37016868591308594
+    ],
+    [
+      0.5284267663955688,
+      0.5565338134765625,
+      0.4872394800186157
+    ]
+  ],
+  "max_cuda_gib": 4.14
+}

@@ -1,0 +1,28 @@
+{
+  "source_url": "https://simcruisegame.github.io/osds/images/release-2.1.0/01-mini-nebraska-roadside-chase.jpg",
+  "model": "Apple SHARP",
+  "implementation": "https://github.com/apple-aiml-research/ml-sharp",
+  "implementation_head_at_download": "aed6527499ef91cba3b54c18d49a870f25947190",
+  "checkpoint_url": "https://ml-site.cdn-apple.com/models/sharp/sharp_2572gikvuh.pt",
+  "checkpoint_sha256": "94211a75198c47f61fca7d739ba08a215418d8d398d48fddf023baccc24f073d",
+  "command": "sharp predict -i input.jpg -o sharp_output -c sharp_2572gikvuh.pt --render --device cuda -v",
+  "camera_intrinsics": "No EXIF focal length; SHARP defaulted to 30 mm (1527.44 px).",
+  "files": {
+    "input.jpg": {
+      "size_bytes": 340627,
+      "sha256": "2e26026659534abdc78c7d171061ce04561cb087a64666135eec4607e30506d9"
+    },
+    "sharp_output/input.ply": {
+      "size_bytes": 66061086,
+      "sha256": "85f6e0689075bd2a4a63a2b577b853bb807be562b5f3d8099793ded036a7a8b4"
+    },
+    "sharp_output/input.mp4": {
+      "size_bytes": 777741,
+      "sha256": "fec33b32d60d2f343f407e4c86986fb81f26c8cba9102e79756b702121e02680"
+    },
+    "sharp_output/input.depth.mp4": {
+      "size_bytes": 185617,
+      "sha256": "e5da0ff43ecbb11d92951d41edfba17f3ec7ef57ba3e4ad077efd82a2143bf95"
+    }
+  }
+}

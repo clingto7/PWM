@@ -1,0 +1,32 @@
+{
+  "renderer": "Blender 5.2.2 LTS, Cycles, 32 samples, 600x600 orthographic per view",
+  "render_script": "../render_mesh.py",
+  "render_script_sha256": "a763bf5b7a510086761026bfcadc367912e5b5bf2331fd913f885334fda882af",
+  "postprocess": "ffmpeg hstack/vstack to four_views.png",
+  "files": {
+    "car_shape.glb": {
+      "size_bytes": 5783944,
+      "sha256": "d990dbee4ea59134e53457c116dd0d2fefe0d396ce033058c0cae4b774c8788d"
+    },
+    "four_views.png": {
+      "size_bytes": 613327,
+      "sha256": "dbe822fa86b9a5904a853dfbbfa190a6ed69d9d68f45b14f9cdd94bffbbe95ff"
+    },
+    "views/view_000.png": {
+      "size_bytes": 308566,
+      "sha256": "874beaf1aa21cefaee21460d7cc7dc9cbb456920a53063e381143eeca8e1fc1e"
+    },
+    "views/view_090.png": {
+      "size_bytes": 298247,
+      "sha256": "6f64a4eb3a043814627f082ce03ea246ebeb1a0bc4f429648822586f3d9969e9"
+    },
+    "views/view_180.png": {
+      "size_bytes": 306066,
+      "sha256": "32eb9955d4614f7a88296373c1ed89c24db467fc82fc210d6e649a5c6734e373"
+    },
+    "views/view_270.png": {
+      "size_bytes": 297424,
+      "sha256": "f38d65a0dea37b75b348c8a9a2d9a3f87587f6159efcd8ca0e9917dd85e1481f"
+    }
+  }
+}

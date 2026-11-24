@@ -1,0 +1,28 @@
+You are using a model of type sam2_video to instantiate a model of type sam2. This is not supported for all configurations of models and can yield errors.
+{
+  "input": "input.jpg",
+  "input_sha256": "2e26026659534abdc78c7d171061ce04561cb087a64666135eec4607e30506d9",
+  "model": "facebook/sam2.1-hiera-large",
+  "weight_sha256": "dc407dce21301fd94abb395c5099b4f2c455fdc8a8f261ac3d0ea6d4cd197230",
+  "method": "uniform 16x9 point prompts; best IoU mask per point; IoU deduplication",
+  "preprocessing": "PIL bilinear resize to 1024x1024; ImageNet mean/std; point coordinates scaled independently to 1024",
+  "count": 25,
+  "raw_count": 144,
+  "shape": [
+    144,
+    256,
+    256
+  ],
+  "load_and_inference_seconds": 0.62,
+  "max_cuda_gib": 7.13,
+  "files": {
+    "sam2_masks.npz": {
+      "size_bytes": 61119,
+      "sha256": "c08d2bc56ff88c1014334d9af9f31c6c8d2086fae47889175135aeb3ee0b2698"
+    },
+    "sam2_overlay.png": {
+      "size_bytes": 1776348,
+      "sha256": "c9016574a10ff77ca47889be3f1e2f119d9318f7a887346d2495366df8a2d4f7"
+    }
+  }
+}

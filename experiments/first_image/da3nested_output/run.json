@@ -1,0 +1,66 @@
+{
+  "input": "input.jpg",
+  "input_sha256": "2e26026659534abdc78c7d171061ce04561cb087a64666135eec4607e30506d9",
+  "model": "depth-anything/DA3NESTED-GIANT-LARGE-1.1",
+  "implementation": "https://github.com/ByteDance-Seed/Depth-Anything-3",
+  "implementation_head_at_download": "3d835ec1a5802d64a8b8b15f817a1ab54809bfe4",
+  "weight_sha256": "8ebe871a022ed58d2fc8fdfb2ebdb31d57b60fe39611c849095851a7b7c6020c",
+  "process_res": 504,
+  "infer_gs": true,
+  "load_seconds": 6.25,
+  "inference_seconds": 0.54,
+  "max_cuda_gib": 9.24,
+  "is_metric": true,
+  "depth_shape": [
+    1,
+    280,
+    504
+  ],
+  "depth_meters_min": 2.2335269451141357,
+  "depth_meters_median": 13.617376327514648,
+  "depth_meters_max": 61.76155090332031,
+  "preview_depth_p01_p99": [
+    2.3350892424583436,
+    48.2939453125
+  ],
+  "exports": {
+    "glb": {
+      "status": "ok",
+      "seconds": 0.04
+    },
+    "gs_ply": {
+      "status": "ok",
+      "seconds": 0.15
+    }
+  },
+  "files": {
+    "depth_preview.png": {
+      "size_bytes": 7955,
+      "sha256": "a00bd7a0e5d8c432e908334d2dd5117fd4a7effebf59137bd85b61d809ebf6fd"
+    },
+    "depth_vis/0000.jpg": {
+      "size_bytes": 56209,
+      "sha256": "01d9cc04ebc57372bf0afbc1d8030824ad4b5fc1574bc8aaac73402eb6084587"
+    },
+    "gs_ply/0000.ply": {
+      "size_bytes": 8451524,
+      "sha256": "985d73d3f17a237eb144869f96d79deb9b4f2c90acc0c3391b9195e0ad3e08cb"
+    },
+    "prediction.npz": {
+      "size_bytes": 684730,
+      "sha256": "08776ce7ad53449d3c6e5b15af42b1605b55f753380f13602c1e1766623b3c19"
+    },
+    "run.log": {
+      "size_bytes": 3011,
+      "sha256": "1fa3eb94a4b75b08f0f272f4b3ffd56bac9f0f30e31053d891477b6fa73cafe9"
+    },
+    "scene.glb": {
+      "size_bytes": 857724,
+      "sha256": "ee959e923104a68c1ad515fcc947d5f4cdb9a453d552ba8719a5a9e2aa6dde6c"
+    },
+    "scene.jpg": {
+      "size_bytes": 56209,
+      "sha256": "01d9cc04ebc57372bf0afbc1d8030824ad4b5fc1574bc8aaac73402eb6084587"
+    }
+  }
+}

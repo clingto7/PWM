@@ -1,0 +1,44 @@
+2026-11-23 14:43:41,288 - hy3dgen.shapgen - INFO - Try to load model from local path: /home/simulator/ws/PWM/experiments/first_image/models/hunyuan21/hunyuan3d-dit-v2-1
+2026-11-23 14:43:41,291 - hy3dgen.shapgen - INFO - Loading model from /home/simulator/ws/PWM/experiments/first_image/models/hunyuan21/hunyuan3d-dit-v2-1/model.fp16.ckpt
+using moe
+using moe
+using moe
+using moe
+using moe
+using moe
+PointCrossAttentionEncoder INFO: pc_sharpedge_size is zero
+Diffusion Sampling::   0%|          | 0/30 [00:00<?, ?it/s]/home/simulator/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/contextlib.py:103: FutureWarning: `torch.backends.cuda.sdp_kernel()` is deprecated. In the future, this context manager will be removed. Please see `torch.nn.attention.sdpa_kernel()` for the new context manager, with updated signature.
+  self.gen = func(*args, **kwds)
+Diffusion Sampling::   3%|▎         | 1/30 [00:00<00:11,  2.55it/s]Diffusion Sampling::   7%|▋         | 2/30 [00:00<00:09,  2.83it/s]Diffusion Sampling::  10%|█         | 3/30 [00:01<00:09,  2.92it/s]Diffusion Sampling::  13%|█▎        | 4/30 [00:01<00:08,  2.97it/s]Diffusion Sampling::  17%|█▋        | 5/30 [00:01<00:08,  3.00it/s]Diffusion Sampling::  20%|██        | 6/30 [00:02<00:07,  3.02it/s]Diffusion Sampling::  23%|██▎       | 7/30 [00:02<00:07,  3.03it/s]Diffusion Sampling::  27%|██▋       | 8/30 [00:02<00:07,  3.04it/s]Diffusion Sampling::  30%|███       | 9/30 [00:03<00:06,  3.04it/s]Diffusion Sampling::  33%|███▎      | 10/30 [00:03<00:06,  3.01it/s]Diffusion Sampling::  37%|███▋      | 11/30 [00:03<00:06,  3.01it/s]Diffusion Sampling::  40%|████      | 12/30 [00:04<00:06,  2.99it/s]Diffusion Sampling::  43%|████▎     | 13/30 [00:04<00:05,  2.98it/s]Diffusion Sampling::  47%|████▋     | 14/30 [00:04<00:05,  2.98it/s]Diffusion Sampling::  50%|█████     | 15/30 [00:05<00:05,  2.98it/s]Diffusion Sampling::  53%|█████▎    | 16/30 [00:05<00:04,  2.97it/s]Diffusion Sampling::  57%|█████▋    | 17/30 [00:05<00:04,  2.98it/s]Diffusion Sampling::  60%|██████    | 18/30 [00:06<00:04,  2.97it/s]Diffusion Sampling::  63%|██████▎   | 19/30 [00:06<00:03,  2.98it/s]Diffusion Sampling::  67%|██████▋   | 20/30 [00:06<00:03,  3.00it/s]Diffusion Sampling::  70%|███████   | 21/30 [00:07<00:02,  3.02it/s]Diffusion Sampling::  73%|███████▎  | 22/30 [00:07<00:02,  3.02it/s]Diffusion Sampling::  77%|███████▋  | 23/30 [00:07<00:02,  3.02it/s]Diffusion Sampling::  80%|████████  | 24/30 [00:08<00:01,  3.00it/s]Diffusion Sampling::  83%|████████▎ | 25/30 [00:08<00:01,  2.99it/s]Diffusion Sampling::  87%|████████▋ | 26/30 [00:08<00:01,  2.98it/s]Diffusion Sampling::  90%|█████████ | 27/30 [00:09<00:01,  2.99it/s]Diffusion Sampling::  93%|█████████▎| 28/30 [00:09<00:00,  3.01it/s]Diffusion Sampling::  97%|█████████▋| 29/30 [00:09<00:00,  3.02it/s]Diffusion Sampling:: 100%|██████████| 30/30 [00:10<00:00,  3.02it/s]Diffusion Sampling:: 100%|██████████| 30/30 [00:10<00:00,  2.99it/s]
+Volume Decoding:   0%|          | 0/2122 [00:00<?, ?it/s]Volume Decoding:   3%|▎         | 73/2122 [00:00<00:02, 712.75it/s]Volume Decoding:   7%|▋         | 145/2122 [00:00<00:04, 436.42it/s]Volume Decoding:   9%|▉         | 195/2122 [00:00<00:04, 395.48it/s]Volume Decoding:  11%|█         | 238/2122 [00:00<00:04, 377.37it/s]Volume Decoding:  13%|█▎        | 278/2122 [00:00<00:05, 366.69it/s]Volume Decoding:  15%|█▍        | 316/2122 [00:00<00:05, 358.14it/s]Volume Decoding:  17%|█▋        | 353/2122 [00:00<00:05, 353.49it/s]Volume Decoding:  18%|█▊        | 389/2122 [00:01<00:04, 350.03it/s]Volume Decoding:  20%|██        | 425/2122 [00:01<00:04, 348.33it/s]Volume Decoding:  22%|██▏       | 460/2122 [00:01<00:04, 346.72it/s]Volume Decoding:  23%|██▎       | 495/2122 [00:01<00:04, 345.16it/s]Volume Decoding:  25%|██▍       | 530/2122 [00:01<00:04, 344.57it/s]Volume Decoding:  27%|██▋       | 565/2122 [00:01<00:04, 343.29it/s]Volume Decoding:  28%|██▊       | 600/2122 [00:01<00:04, 344.91it/s]Volume Decoding:  30%|██▉       | 635/2122 [00:01<00:04, 345.22it/s]Volume Decoding:  32%|███▏      | 670/2122 [00:01<00:04, 344.66it/s]Volume Decoding:  33%|███▎      | 705/2122 [00:01<00:04, 343.60it/s]Volume Decoding:  35%|███▍      | 740/2122 [00:02<00:04, 343.69it/s]Volume Decoding:  37%|███▋      | 775/2122 [00:02<00:03, 343.64it/s]Volume Decoding:  38%|███▊      | 810/2122 [00:02<00:03, 342.85it/s]Volume Decoding:  40%|███▉      | 845/2122 [00:02<00:03, 343.27it/s]Volume Decoding:  41%|████▏     | 880/2122 [00:02<00:03, 342.01it/s]Volume Decoding:  43%|████▎     | 915/2122 [00:02<00:03, 340.80it/s]Volume Decoding:  45%|████▍     | 950/2122 [00:02<00:03, 340.40it/s]Volume Decoding:  46%|████▋     | 985/2122 [00:02<00:03, 339.95it/s]Volume Decoding:  48%|████▊     | 1020/2122 [00:02<00:03, 340.74it/s]Volume Decoding:  50%|████▉     | 1055/2122 [00:02<00:03, 341.47it/s]Volume Decoding:  51%|█████▏    | 1090/2122 [00:03<00:03, 340.95it/s]Volume Decoding:  53%|█████▎    | 1125/2122 [00:03<00:02, 341.55it/s]Volume Decoding:  55%|█████▍    | 1160/2122 [00:03<00:02, 341.69it/s]Volume Decoding:  56%|█████▋    | 1195/2122 [00:03<00:02, 341.81it/s]Volume Decoding:  58%|█████▊    | 1230/2122 [00:03<00:02, 339.43it/s]Volume Decoding:  60%|█████▉    | 1264/2122 [00:03<00:02, 339.14it/s]Volume Decoding:  61%|██████    | 1298/2122 [00:03<00:02, 336.85it/s]Volume Decoding:  63%|██████▎   | 1333/2122 [00:03<00:02, 338.11it/s]Volume Decoding:  64%|██████▍   | 1368/2122 [00:03<00:02, 339.80it/s]Volume Decoding:  66%|██████▌   | 1403/2122 [00:03<00:02, 340.39it/s]Volume Decoding:  68%|██████▊   | 1438/2122 [00:04<00:02, 337.98it/s]Volume Decoding:  69%|██████▉   | 1472/2122 [00:04<00:01, 338.23it/s]Volume Decoding:  71%|███████   | 1506/2122 [00:04<00:01, 335.90it/s]Volume Decoding:  73%|███████▎  | 1541/2122 [00:04<00:01, 338.49it/s]Volume Decoding:  74%|███████▍  | 1576/2122 [00:04<00:01, 339.08it/s]Volume Decoding:  76%|███████▌  | 1611/2122 [00:04<00:01, 339.46it/s]Volume Decoding:  78%|███████▊  | 1646/2122 [00:04<00:01, 340.54it/s]Volume Decoding:  79%|███████▉  | 1681/2122 [00:04<00:01, 341.47it/s]Volume Decoding:  81%|████████  | 1716/2122 [00:04<00:01, 343.67it/s]Volume Decoding:  83%|████████▎ | 1751/2122 [00:05<00:01, 343.80it/s]Volume Decoding:  84%|████████▍ | 1786/2122 [00:05<00:00, 345.09it/s]Volume Decoding:  86%|████████▌ | 1821/2122 [00:05<00:00, 345.38it/s]Volume Decoding:  87%|████████▋ | 1856/2122 [00:05<00:00, 345.08it/s]Volume Decoding:  89%|████████▉ | 1891/2122 [00:05<00:00, 344.21it/s]Volume Decoding:  91%|█████████ | 1926/2122 [00:05<00:00, 342.34it/s]Volume Decoding:  92%|█████████▏| 1961/2122 [00:05<00:00, 342.86it/s]Volume Decoding:  94%|█████████▍| 1996/2122 [00:05<00:00, 340.14it/s]Volume Decoding:  96%|█████████▌| 2031/2122 [00:05<00:00, 339.79it/s]Volume Decoding:  97%|█████████▋| 2065/2122 [00:05<00:00, 338.59it/s]Volume Decoding:  99%|█████████▉| 2099/2122 [00:06<00:00, 336.43it/s]Volume Decoding: 100%|██████████| 2122/2122 [00:06<00:00, 347.02it/s]
+{
+  "input": "/home/simulator/ws/PWM/experiments/first_image/car_input/car_rgba.png",
+  "input_sha256": "feec80a5ff7fd781d74c5d18de02d524e811b547c5386e5b72ec1f5e2892b722",
+  "model": "tencent/Hunyuan3D-2.1, hunyuan3d-dit-v2-1, shape only",
+  "implementation": "https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1",
+  "implementation_head_at_download": "82920d643c0dc2f7bfd7255f45f62d386edfe60c",
+  "weight_sha256": "6b519fc7242f78e9b5f47ea4d55668fe3d944a2d27332f4ca68d29a6ff603f5e",
+  "seed": 42,
+  "steps": 30,
+  "guidance_scale": 5.0,
+  "octree_resolution": 256,
+  "output": "car_shape.glb",
+  "load_seconds": 16.57,
+  "inference_seconds": 16.75,
+  "vertices": 160457,
+  "faces": 321470,
+  "watertight": true,
+  "bounds": [
+    [
+      -0.49416735768318176,
+      -0.3828745484352112,
+      -0.9976804256439209
+    ],
+    [
+      0.4860117435455322,
+      0.3833393454551697,
+      0.9892842173576355
+    ]
+  ],
+  "max_cuda_gib": 7.63
+}

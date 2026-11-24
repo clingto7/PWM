@@ -1,0 +1,14 @@
+BlenderMCP addon registered
+15:08:09 | INFO: Data are loaded, start creating Blender stuff
+15:08:09 | INFO: Blender create Mesh node geometry_0
+15:08:09 | INFO: glTF import finished in 0.08s
+/Users/m1zu/ws/PWM/experiments/first_image/render_mesh.py:32: DeprecationWarning: 'Material.use_nodes' is expected to be removed in Blender 6.0
+  material.use_nodes = True
+00:01.968  render           | Saved: 'experiments/first_image/triposr_output/views/view_000.png'
+00:03.143  render           | Saved: 'experiments/first_image/triposr_output/views/view_090.png'
+00:04.317  render           | Saved: 'experiments/first_image/triposr_output/views/view_180.png'
+00:05.307  render           | Saved: 'experiments/first_image/triposr_output/views/view_270.png'
+BlenderMCP addon unregistered
+Blender 5.2.2 LTS (hash d13f752e3b9c built 2026-09-15 01:49:19)
+
+Blender quit

@@ -1,0 +1,42 @@
+{
+  "input": "/home/simulator/ws/PWM/experiments/first_image/car_input/car_rgba.png",
+  "input_sha256": "feec80a5ff7fd781d74c5d18de02d524e811b547c5386e5b72ec1f5e2892b722",
+  "model": "tencent/Hunyuan3D-2.1, hunyuan3d-dit-v2-1, shape only",
+  "implementation": "https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1",
+  "implementation_head_at_download": "82920d643c0dc2f7bfd7255f45f62d386edfe60c",
+  "weight_sha256": "6b519fc7242f78e9b5f47ea4d55668fe3d944a2d27332f4ca68d29a6ff603f5e",
+  "seed": 42,
+  "steps": 30,
+  "guidance_scale": 5.0,
+  "octree_resolution": 256,
+  "output": "car_shape.glb",
+  "load_seconds": 16.57,
+  "inference_seconds": 16.75,
+  "vertices": 160457,
+  "faces": 321470,
+  "watertight": true,
+  "bounds": [
+    [
+      -0.49416735768318176,
+      -0.3828745484352112,
+      -0.9976804256439209
+    ],
+    [
+      0.4860117435455322,
+      0.3833393454551697,
+      0.9892842173576355
+    ]
+  ],
+  "max_cuda_gib": 7.63,
+  "output_sha256": "d990dbee4ea59134e53457c116dd0d2fefe0d396ce033058c0cae4b774c8788d",
+  "component_face_counts": [
+    321326,
+    40,
+    24,
+    24,
+    24,
+    16,
+    8,
+    8
+  ]
+}

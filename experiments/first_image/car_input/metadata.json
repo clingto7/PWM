@@ -1,0 +1,32 @@
+{
+  "source_sha256": "2e26026659534abdc78c7d171061ce04561cb087a64666135eec4607e30506d9",
+  "method": "largest saturated-red component in lower half -> padded box prompt to SAM 2.1 Tiny",
+  "red_component_bbox_xyxy": [
+    631,
+    644,
+    1000,
+    910
+  ],
+  "sam_box_xyxy": [
+    608.8599853515625,
+    585.47998046875,
+    1022.1400146484375,
+    931.280029296875
+  ],
+  "sam_scores": [
+    0.9787598252296448,
+    0.9600507020950317,
+    0.9819583296775818
+  ],
+  "selected_mask": 2,
+  "mask_bbox_xyxy": [
+    631,
+    607,
+    1002,
+    911
+  ],
+  "car_rgba_size": [
+    426,
+    426
+  ]
+}

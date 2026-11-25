@@ -6,8 +6,11 @@ import math
 from pathlib import Path
 
 
-# Spec #6 gates remain unset until the first A800 measurement.
-THRESHOLDS = {'penetration_m': None, 'resting_height_error_m': None, 'final_speed_m_s': None, 'energy_gain_j_kg': None, 'ground_fit_rms_m': None}
+# First A800 run (6075606): penetration .00546 m, rest .00391 m,
+# speed 3.74e-6 m/s, energy gain .000155 J/kg, fit RMS .00719 m.
+# Round to the next simple bound above each observation; these are measured
+# prototype gates, not claims of model accuracy or statistical tolerances.
+THRESHOLDS = {'penetration_m': 0.01, 'resting_height_error_m': 0.01, 'final_speed_m_s': 0.001, 'energy_gain_j_kg': 0.001, 'ground_fit_rms_m': 0.01}
 
 def check(root):
     record=json.loads((root/'run.json').read_text())

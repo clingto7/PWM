@@ -138,30 +138,33 @@ def build(args):
     sim_start = time.perf_counter()
     client = p.connect(p.DIRECT)
     try:
-        p.setGravity(0,0,-9.81)
-        p.setTimeStep(1/240)
-        p.setPhysicsEngineParameter(fixedTimeStep=1/240, numSolverIterations=100, deterministicOverlappingPairs=1)
-        ground_collision = p.createCollisionShape(p.GEOM_MESH, vertices=vertices, indices=indices, flags=p.GEOM_FORCE_CONCAVE_TRIMESH)
-        ground_visual = p.createVisualShape(p.GEOM_MESH, vertices=vertices, indices=indices, rgbaColor=[.5,.5,.5,1])
-        ground = p.createMultiBody(0, ground_collision, ground_visual)
-        p.changeDynamics(ground,-1,lateralFriction=args.friction,restitution=0)
-        walls = []
-        # Radial arc and two sector edges are collision-only static segments.
-        segments = []
-        for t in np.linspace(-half_angle, half_angle, 65)[:-1]:
-            t2 = t + 2*half_angle/64
-            segments.append(((args.radius*math.sin(t),args.radius*math.cos(t)),(args.radius*math.sin(t2),args.radius*math.cos(t2))))
-        segments += [((0,0),(args.radius*math.sin(t),args.radius*math.cos(t))) for t in (-half_angle,half_angle)]
-        for (u,v) in segments:
-            dx,dy = v[0]-u[0],v[1]-u[1]
-            mid = [(u[0]+v[0])/2,(u[1]+v[1])/2,flat_z+.5]
-            shape = p.createCollisionShape(p.GEOM_BOX,halfExtents=[math.hypot(dx,dy)/2,.04,.5])
-            walls.append(p.createMultiBody(0,shape,basePosition=mid,baseOrientation=p.getQuaternionFromEuler([0,0,math.atan2(dy,dx)])))
-        shape = p.createCollisionShape(p.GEOM_BOX, halfExtents=[width/2,length/2,box_h/2])
-        visual = p.createVisualShape(p.GEOM_BOX, halfExtents=[width/2,length/2,box_h/2],rgbaColor=[1,0,0,1])
-        body = p.createMultiBody(mass,shape,visual,basePosition=car_pos)
-        p.changeDynamics(body,-1,lateralFriction=args.friction,restitution=0,linearDamping=0,angularDamping=0)
-        p.resetBaseVelocity(body,linearVelocity=[0,args.speed,0])
+        def create_world():
+            p.setGravity(0,0,-9.81)
+            p.setTimeStep(1/240)
+            p.setPhysicsEngineParameter(fixedTimeStep=1/240, numSolverIterations=100, deterministicOverlappingPairs=1)
+            ground_collision = p.createCollisionShape(p.GEOM_MESH, vertices=vertices, indices=indices, flags=p.GEOM_FORCE_CONCAVE_TRIMESH)
+            ground_visual = p.createVisualShape(p.GEOM_MESH, vertices=vertices, indices=indices, rgbaColor=[.5,.5,.5,1])
+            ground = p.createMultiBody(0, ground_collision, ground_visual)
+            p.changeDynamics(ground,-1,lateralFriction=args.friction,restitution=0)
+            walls = []
+            # Radial arc and two sector edges are collision-only static segments.
+            segments = []
+            for t in np.linspace(-half_angle, half_angle, 65)[:-1]:
+                t2 = t + 2*half_angle/64
+                segments.append(((args.radius*math.sin(t),args.radius*math.cos(t)),(args.radius*math.sin(t2),args.radius*math.cos(t2))))
+            segments += [((0,0),(args.radius*math.sin(t),args.radius*math.cos(t))) for t in (-half_angle,half_angle)]
+            for (u,v) in segments:
+                dx,dy = v[0]-u[0],v[1]-u[1]
+                mid = [(u[0]+v[0])/2,(u[1]+v[1])/2,flat_z+.5]
+                shape = p.createCollisionShape(p.GEOM_BOX,halfExtents=[math.hypot(dx,dy)/2,.04,.5])
+                walls.append(p.createMultiBody(0,shape,basePosition=mid,baseOrientation=p.getQuaternionFromEuler([0,0,math.atan2(dy,dx)])))
+            shape = p.createCollisionShape(p.GEOM_BOX, halfExtents=[width/2,length/2,box_h/2])
+            visual = p.createVisualShape(p.GEOM_BOX, halfExtents=[width/2,length/2,box_h/2],rgbaColor=[1,0,0,1])
+            body = p.createMultiBody(mass,shape,visual,basePosition=car_pos)
+            p.changeDynamics(body,-1,lateralFriction=args.friction,restitution=0,linearDamping=0,angularDamping=0)
+            p.resetBaseVelocity(body,linearVelocity=[0,args.speed,0])
+            return ground, body
+        ground, body = create_world()
         def trajectory():
             rows=[]
             penetration=0.0
@@ -174,7 +177,9 @@ def build(args):
                 penetration=max(penetration,max([0]+[-float(q[8]) for q in contacts]))
             return rows,penetration
         rows,penetration=trajectory()
-        p.resetBasePositionAndOrientation(body,car_pos,[0,0,0,1]); p.resetBaseVelocity(body,linearVelocity=[0,args.speed,0],angularVelocity=[0,0,0])
+        p.disconnect(client)
+        client = p.connect(p.DIRECT)
+        ground, body = create_world()
         replay,_=trajectory()
         replay_identical=rows==replay
         write_json(out/'trajectory.json',rows)

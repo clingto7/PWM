@@ -33,9 +33,9 @@ class CheckCliTest(unittest.TestCase):
             root=Path(tmp);self.fixture(root)
             before={str(p):p.read_bytes() for p in root.rglob('*') if p.is_file()}
             result=self.invoke(root)
-            self.assertNotEqual(result.returncode,0,result.stderr+result.stdout)
+            self.assertEqual(result.returncode,0,result.stderr+result.stdout)
             report=json.loads(result.stdout)
-            self.assertEqual(report['checks']['penetration'],'未设')
+            self.assertTrue(report['checks']['penetration'])
             self.assertTrue(report['checks']['replay'])
             self.assertEqual(before,{str(p):p.read_bytes() for p in root.rglob('*') if p.is_file()})
 
@@ -66,6 +66,18 @@ class CheckCliTest(unittest.TestCase):
             result=self.invoke(root)
             self.assertFalse(json.loads(result.stdout)['checks']['hashes'])
 
+    def test_rejects_resting_error_above_measured_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);rec=self.fixture(root)
+            for name in ('trajectory.json','replay_trajectory.json'):
+                rows=json.loads((root/name).read_text())
+                rows[-1][2]=.511
+                (root/name).write_text(json.dumps(rows))
+                rec['outputs'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
+            (root/'run.json').write_text(json.dumps(rec))
+            result=self.invoke(root)
+            self.assertFalse(json.loads(result.stdout)['checks']['resting_height'])
+
     def test_rejects_penetration_with_intact_hashes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);rec=self.fixture(root)
@@ -73,7 +85,7 @@ class CheckCliTest(unittest.TestCase):
             (root/'run.json').write_text(json.dumps(rec))
             result=self.invoke(root)
             self.assertNotEqual(result.returncode,0)
-            self.assertEqual(json.loads(result.stdout)['checks']['penetration'],'未设')
+            self.assertFalse(json.loads(result.stdout)['checks']['penetration'])
 
 
 if __name__=='__main__': unittest.main()

@@ -409,7 +409,7 @@ if __name__=='__main__':
     parser.add_argument('--obstacle-min-pixels',type=int,default=3)
     parser.add_argument('--obstacle-min-cells',type=int,default=2)
     parser.add_argument('--obstacles-render-only',action='store_true')
-    parser.add_argument('--seconds',type=float,default=3)
+    parser.add_argument('--seconds',type=float,default=5)
     args=parser.parse_args()
     values=(args.radius,args.angle,args.cell,args.near_depth,args.ground_inlier,args.obstacle_height,args.friction,args.density,args.speed,args.seconds)
     if not (all(math.isfinite(value) for value in values) and 0 < args.radius <= 100 and 0 < args.angle < 180 and 0 < args.cell <= args.radius/2 and 0 < args.near_depth <= args.radius and 0 < args.ground_inlier <= 2 and 0 < args.obstacle_height <= 10 and 1 <= args.obstacle_min_pixels <= 1000 and 1 <= args.obstacle_min_cells <= 1000 and 0 <= args.friction <= 2 and 0 < args.density <= 10000 and 0 < args.speed <= 100 and 0 < args.seconds <= 60 and int(args.seconds*240) >= 1 and int(args.seconds*30) >= 1):

@@ -172,6 +172,7 @@ def check(root):
             max_angular_speed=max(math.sqrt(sum(v*v for v in row[10:13])) for row in rows)
             penetration=case['max_contact_penetration_m']
             case_checks={'impulse_record':case['impulse']==impulse and impulse['application_point']=='center_of_mass' and impulse['application_point_world_m']==box['initial_position_m'] and math.isclose(impulse['magnitude_n_s'],params['derived_mass_kg']*speed,rel_tol=1e-9) and all(math.isclose(a,b/speed,abs_tol=1e-9) for a,b in zip(impulse['direction'],delta)),
+                         'friction_record':scene.get('contact_friction')=={'ground_lateral_friction':params['friction'],'car_lateral_friction':1.0,'effective_ground_car_friction':params.get('effective_ground_car_friction'),'obstacle_lateral_friction':0.0} and params.get('effective_ground_car_friction')==params['friction'] and params.get('car_lateral_friction')==1.0,
                          'initial_stationary':rows[0][:3]==box['initial_position_m'] and all(abs(v)<1e-12 for v in rows[0][7:13]),
                          'penetration':penetration<=limits['penetration_m'],
                          'final_rest':end_linear_speed<=limits['final_speed_m_s'] and abs(last[2]-box['size_m'][2]/2-ground['flat_world_z_m'])<=limits['resting_height_error_m'],
@@ -181,7 +182,8 @@ def check(root):
                          'replay':rows==again}
             case_metrics={'max_penetration_m':penetration,'final_speed_m_s':end_linear_speed,'final_angular_speed_rad_s':end_angular_speed,'max_angular_speed_rad_s':max_angular_speed,'max_step_specific_energy_gain_j_kg':gain}
             if name=='coast':
-                expected=speed**2/(2*params['friction']*9.81) if params['friction'] else math.inf
+                effective_mu=params.get('effective_ground_car_friction',params['friction']**2)
+                expected=speed**2/(2*effective_mu*9.81) if effective_mu else math.inf
                 actual=math.hypot(last[0]-rows[0][0],last[1]-rows[0][1])
                 case_metrics.update({'coast_distance_m':actual,'expected_distance_m':expected,'distance_error_m':actual-expected})
                 case_checks['analytical_distance']=gate(abs(actual-expected),limits['coast_distance_error_m'])

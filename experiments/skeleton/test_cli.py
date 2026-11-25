@@ -223,10 +223,11 @@ class CheckCliTest(unittest.TestCase):
             rec['schema']=2
             scene=json.loads((root/'scene.json').read_text())
             scene['camera']={'forward':[0,1,0],'up':[0,0,1],'intrinsics':[[100,0,252],[0,100,140],[0,0,1]]}
+            scene['contact_friction']={'ground_lateral_friction':.5,'car_lateral_friction':1.0,'effective_ground_car_friction':.5,'obstacle_lateral_friction':0.0}
             (root/'scene.json').write_text(json.dumps(scene))
             rec['outputs']['scene.json']=hashlib.sha256((root/'scene.json').read_bytes()).hexdigest()
             rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
-            rec['parameters'].update({'derived_mass_kg':1000,'friction':.5})
+            rec['parameters'].update({'derived_mass_kg':1000,'friction':.5,'car_lateral_friction':1.0,'effective_ground_car_friction':.5})
             initial=[0,0,.5,0,0,0,1,0,0,0,0,0,0]
             coast=[initial]+[[0,min(i/240,.8),.5,0,0,0,1,0,0,0,0,0,0] for i in range(1,241)]
             ballistic=[initial]
@@ -259,6 +260,11 @@ class CheckCliTest(unittest.TestCase):
             self.assertTrue(cases['obstacle']['checks']['solid_target'])
             self.assertEqual(cases['coast']['checks']['analytical_distance'],'未设')
             self.assertGreater(cases['coast']['metrics']['distance_error_m'],.5)
+            rec['parameters']['effective_ground_car_friction']=.36
+            (root/'run.json').write_text(json.dumps(rec))
+            mismatched=json.loads(self.invoke(root).stdout)
+            self.assertFalse(mismatched['metrics']['impulse_cases']['coast']['checks']['friction_record'])
+            rec['parameters']['effective_ground_car_friction']=.5
             for filename in ('trajectory.json','replay_trajectory.json'):
                 path=root/'obstacle'/filename
                 changed=json.loads(path.read_text());changed[-1][10]=2

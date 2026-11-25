@@ -12,7 +12,7 @@ from pathlib import Path
 # prototype gates, not claims of model accuracy or statistical tolerances.
 BASELINE_INITIAL_MASK_IOU = 0.3749  # published 6075606 first-frame surrogate
 THRESHOLDS = {'penetration_m': 0.01, 'resting_height_error_m': 0.01, 'final_speed_m_s': 0.001, 'energy_gain_j_kg': 0.001, 'ground_fit_rms_m': 0.01,
-              'final_angular_speed_rad_s':None,'coast_distance_error_m':None,'flight_time_error_s':None,'range_error_m':None,'parabola_vertical_residual_m':None,'parabola_horizontal_residual_m':None}
+              'final_angular_speed_rad_s':0.001,'coast_distance_error_m':0.02,'flight_time_error_s':0.02,'range_error_m':0.05,'parabola_vertical_residual_m':0.01,'parabola_horizontal_residual_m':1e-6}
 
 def check(root):
     record=json.loads((root/'run.json').read_text())

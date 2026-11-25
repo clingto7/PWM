@@ -13,13 +13,24 @@ records the velocity change, impulse magnitude and direction, center of mass
 application point, and obstacle target. The checker reports the measured and
 expected ballistic flight time and range, coast stopping distance, and obstacle
 contact and penetration, plus the shared rest, energy, replay, and camera checks.
-The checker reports analytical errors and pre-landing parabola residuals with
-the acceptance gate marked `未设` until the first A800 measurements establish
-evidence-based limits. An unset gate does not count as a pass.
+The checker reports analytical errors and pre-landing parabola residuals.
+After the first complete 5 s / 150-frame A800 run (c4ce582), the six new
+limits were backfilled as measured prototype gates:
+
+| Quantity | First measurement | Gate | Basis |
+| --- | ---: | ---: | --- |
+| Final angular speed | 0 rad/s, all cases | 0.001 rad/s | Same small terminal scale as the existing 0.001 m/s linear gate, in angular units. |
+| Coast distance error | −0.0102186 m | 0.02 m | About 1 cm margin over the measured absolute error. |
+| Ballistic flight time error | −0.0119139 s | 0.02 s | About two 1/240 s physics steps beyond the measured error. |
+| Ballistic range error | −0.0357416 m | 0.05 m | About 1.4 cm margin over the measured absolute error. |
+| Maximum prelanding vertical residual | 0.00800469 m | 0.01 m | About 2 mm margin over the measured residual. |
+| Maximum prelanding horizontal residual | 1.67e−14 m | 1e−6 m | Allows floating-point noise while still catching micrometre-scale drift. |
+
+These are bounds for the selected scene and solver, not general accuracy
+claims. The existing 0.001 m/s final linear-speed gate is unchanged.
 New runs use schema 2 and require all three cases; the checker continues to
 accept historical schema 1 runs against their original checks. Linear final
-speed keeps its measured m/s gate. Angular final speed is reported separately
-in rad/s with its gate unset until the first A800 measurement.
+speed and angular final speed are reported separately in m/s and rad/s.
 PyBullet combines the ground and car lateral friction multiplicatively. The
 ground uses the nominal coefficient and the car uses 1.0, so the effective
 coast coefficient matches the recorded nominal value. The obstacle impulse

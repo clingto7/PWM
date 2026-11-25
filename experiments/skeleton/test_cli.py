@@ -89,6 +89,69 @@ class CheckCliTest(unittest.TestCase):
                 report=json.loads((root/'first_round_conclusion.json').read_text())
                 self.assertEqual(report['conditions']['road_obstacles']['decision'],render_only)
 
+    def test_conclusion_fallback_does_not_recover_bad_ratio_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);rec=self.obstacle_fixture(root,render_only=True)
+            rec['measurements']['road_false_positive_ratio']=1.0
+            (root/'run.json').write_text(json.dumps(rec))
+            subprocess.run([sys.executable,str(CONCLUDE),str(root)],capture_output=True,text=True)
+            report=json.loads((root/'first_round_conclusion.json').read_text())
+            self.assertTrue(report['conditions']['road_obstacles']['proxy_signal_usable'])
+            self.assertFalse(report['conditions']['road_obstacles']['decision'])
+    def test_gaussian_comparison_is_measured_from_frames_and_read_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); rec=self.fixture(root)
+            for directory in ('gaussian_depth','gaussian_instance_id','gaussian_edge_mixing'):
+                (root/directory).mkdir()
+            raster_ids=np.array([[1,1,0],[2,3,0]],dtype=np.uint16)
+            gaussian_ids=np.array([[1,0,0],[2,3,0]],dtype=np.uint16)
+            for name,array in (('instance_id/0000.png',raster_ids),('gaussian_instance_id/0000.png',gaussian_ids),('depth/0000.png',np.array([[1000,1000,0],[2000,3000,0]],dtype=np.uint16)),('gaussian_depth/0000.png',np.array([[1100,0,0],[2100,2900,0]],dtype=np.uint16)),('gaussian_edge_mixing/0000.png',np.array([[0,0,0],[255,0,0]],dtype=np.uint8))):
+                Image.fromarray(array).save(root/name)
+                rec['outputs'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
+            for name in ('heightmap.npz','obstacles.npz','fitted_car.obj'):
+                (root/name).write_bytes(b'fixture')
+                rec['outputs'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
+            rec['schema']=1
+            rec['required_renderers']=['raster','gaussian']
+            rec['gaussian']={'sampling':{'method':'geometry only','seed':42,'no_optimization':True},'entity_counts':{'1':2,'2':3,'3':1},'frame_times_s':[.02], 'raster_frame_times_s':[.01], 'alpha_threshold':.1,'feature_method':'one-hot RGB+ED','depth_method':'expected optical depth'}
+            gaussian_outputs={name:hashval for name,hashval in rec['outputs'].items() if name.startswith('gaussian_')}
+            rec['stages']['gaussian_render']={'inputs':{name:rec['outputs'][name] for name in ('scene.json','heightmap.npz','obstacles.npz','fitted_car.obj','trajectory.json')},'outputs':gaussian_outputs}
+            (root/'run.json').write_text(json.dumps(rec))
+            before={str(p):p.read_bytes() for p in root.rglob('*') if p.is_file()}
+            result=self.invoke(root)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            metrics=json.loads(result.stdout)['metrics']['gaussian_comparison']
+            self.assertEqual(metrics['iou_by_id']['1'],.5)
+            self.assertAlmostEqual(metrics['depth_mae_m_on_overlap'],.1)
+            self.assertEqual(metrics['crack_pixels'],1)
+            self.assertEqual(metrics['edge_mixing_pixels'],1)
+            self.assertEqual(metrics['raster_mean_frame_s'],.01)
+            self.assertEqual(metrics['gaussian_mean_frame_s'],.02)
+            self.assertEqual(before,{str(p):p.read_bytes() for p in root.rglob('*') if p.is_file()})
+            stage=rec['stages'].pop('gaussian_render')
+            (root/'run.json').write_text(json.dumps(rec))
+            self.assertFalse(json.loads(self.invoke(root).stdout)['checks']['gaussian_stage_provenance'])
+            rec['stages']['gaussian_render']=stage
+            (root/'run.json').write_text(json.dumps(rec))
+            (root/'gaussian_depth/0000.png').rename(root/'missing.png')
+            self.assertFalse(json.loads(self.invoke(root).stdout)['checks']['gaussian_frames'])
+            (root/'missing.png').rename(root/'gaussian_depth/0000.png')
+            Image.fromarray(np.zeros_like(gaussian_ids)).save(root/'gaussian_instance_id/0000.png')
+            rec['outputs']['gaussian_instance_id/0000.png']=hashlib.sha256((root/'gaussian_instance_id/0000.png').read_bytes()).hexdigest()
+            (root/'run.json').write_text(json.dumps(rec))
+            changed=json.loads(self.invoke(root).stdout)['metrics']['gaussian_comparison']
+            self.assertEqual(changed['iou_by_id']['1'],0)
+            self.assertEqual(changed['crack_pixels'],4)
+
+    def test_requested_gaussian_run_cannot_pass_without_stage_or_frames(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);rec=self.fixture(root)
+            rec['schema']=1;rec['required_renderers']=['raster','gaussian']
+            (root/'run.json').write_text(json.dumps(rec))
+            result=self.invoke(root)
+            self.assertNotEqual(result.returncode,0)
+            self.assertFalse(json.loads(result.stdout)['checks']['gaussian_required'])
+
     def fixture(self,root):
         root.mkdir(exist_ok=True)
         (root/'depth').mkdir();(root/'instance_id').mkdir()

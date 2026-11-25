@@ -371,9 +371,11 @@ def build(args):
         def encoder(path):
             return subprocess.Popen(['ffmpeg','-hide_banner','-loglevel','error','-y','-f','rawvideo','-pix_fmt','gray','-s',f'{w}x{h}','-r','30','-i','-','-an','-c:v','libx264','-pix_fmt','yuv420p',str(path)],stdin=subprocess.PIPE)
         enc_depth,enc_id=encoder(depth_video),encoder(id_video)
+        raster_frame_times=[]
         try:
             for frame in range(int(args.seconds*30)):
                 row=rows[min(len(rows)-1,frame*8)]
+                frame_start=time.perf_counter()
                 p.resetBasePositionAndOrientation(body,row[:3],row[3:7])
                 _,_,_,zbuf,seg=p.getCameraImage(w,h,viewMatrix=view,projectionMatrix=projection,renderer=p.ER_TINY_RENDERER,flags=p.ER_SEGMENTATION_MASK_OBJECT_AND_LINKINDEX)
                 zbuf=np.asarray(zbuf).reshape(h,w)
@@ -387,6 +389,7 @@ def build(args):
                 ids[raw<0]=0
                 # Zero is invalid/no entity; foreground retains metric mm.
                 millimeters=np.where(ids>0,np.clip(metric*1000,1,65535),0).astype(np.uint16)
+                raster_frame_times.append(time.perf_counter()-frame_start)
                 Image.fromarray(millimeters).save(depth_dir/f'{frame:04d}.png')
                 Image.fromarray(ids).save(ids_dir/f'{frame:04d}.png')
                 if frame == 0:
@@ -441,7 +444,12 @@ def build(args):
     record['parameters']['ballistic_up_speed_m_s']=args.ballistic_up_speed
     record['measurements']['ballistic_in_camera']=ballistic_visible
     record['stages']['simulation_replay']['outputs'].update({name:outputs[name] for name in outputs if name.startswith(('ballistic/','obstacle/')) or name=='impulses.json'})
+    record['raster_frame_times_s']=raster_frame_times
+    if args.render_gaussians:
+        record['required_renderers']=['raster','gaussian']
     write_json(out/'run.json',record)
+    if args.render_gaussians:
+        subprocess.run([sys.executable,str(Path(__file__).with_name('gaussian.py')),str(out)],check=True)
     print(json.dumps({'run_dir':str(out),'frames':int(args.seconds*30),'measurements':record['measurements']},indent=2))
 
 
@@ -463,6 +471,7 @@ if __name__=='__main__':
     parser.add_argument('--obstacle-min-cells',type=int,default=2)
     parser.add_argument('--obstacles-render-only',action='store_true')
     parser.add_argument('--seconds',type=float,default=5)
+    parser.add_argument('--render-gaussians',action='store_true',help='also render geometric gsplat frames (requires CUDA)')
     args=parser.parse_args()
     values=(args.radius,args.angle,args.cell,args.near_depth,args.ground_inlier,args.obstacle_height,args.friction,args.density,args.speed,args.obstacle_min_speed,args.ballistic_up_speed,args.seconds)
     if not (all(math.isfinite(value) for value in values) and 0 < args.radius <= 100 and 0 < args.angle < 180 and 0 < args.cell <= args.radius/2 and 0 < args.near_depth <= args.radius and 0 < args.ground_inlier <= 2 and 0 < args.obstacle_height <= 10 and 1 <= args.obstacle_min_pixels <= 1000 and 1 <= args.obstacle_min_cells <= 1000 and 0 <= args.friction <= 2 and 0 < args.density <= 10000 and 0 < args.speed <= 100 and 0 < args.obstacle_min_speed <= 15 and 0 < args.seconds <= 60 and int(args.seconds*240) >= 1 and int(args.seconds*30) >= 1):

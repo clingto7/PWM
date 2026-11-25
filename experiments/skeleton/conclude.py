@@ -34,7 +34,9 @@ def conclude(root, thresholds=None):
     proxy_checks = [checks.get(key) for key in proxy_keys]
     proxy_usable = bool(proxy_checks) and all(v is True for v in proxy_checks) and sound
     road_gate = decision(road, limits['road_false_positive_ratio_max'], evidence=sound and checks.get('obstacle_road_ratio') is True)
-    if road_gate is False and fallback and proxy_usable:
+    if (road_gate is False and road is not None and limits['road_false_positive_ratio_max'] is not None
+            and road > limits['road_false_positive_ratio_max'] and checks.get('obstacle_road_ratio') is True
+            and fallback and proxy_usable):
         road_gate = True
     cases = metrics.get('impulse_cases', {})
     solver = {

@@ -54,6 +54,33 @@ normal rigid-body sleeping is explicitly enabled and recorded for the car so
 terminal contact jitter can settle without editing trajectory velocities.
 The existing 0.001 m/s final linear-speed gate remains unchanged.
 
+Issue #12 comparison is opt-in, preserving CPU-only raster runs:
+
+```sh
+python experiments/skeleton/run.py /path/to/new-run --render-gaussians
+python experiments/skeleton/check.py /path/to/new-run
+```
+
+This option requires CUDA and gsplat 1.5.3 in the pinned A800 environment.
+Before launching gsplat, the schema 2 run record declares Gaussian
+as a required renderer; the checker fails an incomplete Gaussian run. It writes
+`gaussian_depth/`, `gaussian_instance_id/`, and
+`gaussian_edge_mixing/` PNGs at the raster frames' 504×280 resolution.
+Gaussian depth is gsplat expected optical depth in millimetres; zero denotes
+no covered entity. IDs use argmax over one-hot feature channels, with a 0.2
+alpha cutoff. The edge-mixing PNG marks pixels where the second ID score is at
+least 25% of the strongest and exceeds 0.02. The checker compares each saved
+frame against the raster frame, reporting per-ID IoU, depth MAE/max on pixels
+covered by both, raster-only crack pixels, mixed-edge pixels, and average
+per-frame times. These are measurements, not pass thresholds. Frame timing
+includes pose update, rendering, and GPU/CPU readback but excludes PNG writing.
+`run.json` records deterministic geometry sampling, per-entity counts, the
+depth/feature method, versions, frame times, output hashes, and stage inputs.
+gsplat's RGB+ED feature/depth path passed the accepted #7 probe, so no fallback
+is active. If this path fails on another gsplat version, record that failure
+and use per-entity alpha passes for IDs plus a separate ED depth pass as the
+fallback; that alternative is documented but is not implemented in this ticket.
+
 Obstacle options: `--obstacle-height 0.35` (metres above the fitted plane),
 `--obstacle-min-pixels 3` (DA3 votes per grid cell), and
 `--obstacle-min-cells 2` (four-connected component size). The

@@ -98,6 +98,55 @@ class CheckCliTest(unittest.TestCase):
             report=json.loads((root/'first_round_conclusion.json').read_text())
             self.assertTrue(report['conditions']['road_obstacles']['proxy_signal_usable'])
             self.assertFalse(report['conditions']['road_obstacles']['decision'])
+
+    def test_conclusion_fallback_requires_mode_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);rec=self.obstacle_fixture(root,render_only=True)
+            with np.load(root/'obstacles.npz') as data:
+                arrays={key:data[key] for key in data.files}
+            arrays['road_cells'][:]=0;arrays['road_cells'][0,0]=1
+            np.savez_compressed(root/'obstacles.npz',**arrays)
+            scene=json.loads((root/'scene.json').read_text())
+            scene['obstacles'].update(road_false_positive_cells=1,road_cells=1,road_false_positive_ratio=1.0)
+            scene['obstacles']['components'][0]['collision_enabled']=True
+            (root/'scene.json').write_text(json.dumps(scene))
+            rec['measurements'].update(road_false_positive_cells=1,road_cells=1,road_false_positive_ratio=1.0)
+            for name in ('scene.json','obstacles.npz'):
+                rec['outputs'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
+            rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
+            for stage in ('simulation_replay','proxy_render_video'):
+                rec['stages'][stage]['inputs']['obstacles.npz']=rec['outputs']['obstacles.npz']
+            (root/'run.json').write_text(json.dumps(rec))
+            subprocess.run([sys.executable,str(CONCLUDE),str(root)],capture_output=True,text=True)
+            report=json.loads((root/'first_round_conclusion.json').read_text())
+            self.assertTrue(report['conditions']['road_obstacles']['proxy_signal_usable'])
+            self.assertFalse(report['conditions']['road_obstacles']['decision'])
+
+    def test_conclusion_rejects_missing_required_gaussian_with_separate_checker_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);rec=self.fixture(root)
+            rec['required_renderers']=['raster','gaussian']
+            (root/'run.json').write_text(json.dumps(rec))
+            process=subprocess.run([sys.executable,str(CONCLUDE),str(root)],capture_output=True,text=True)
+            self.assertEqual(process.returncode,1,process.stderr)
+            report=json.loads((root/'first_round_conclusion.json').read_text())
+            self.assertTrue(report['source_integrity_passed'])
+            self.assertFalse(report['pipeline_checker_passed'])
+            self.assertTrue(report['conditions']['vehicle_silhouette']['decision'])
+            self.assertEqual(report['conditions']['solver']['decision'],'未设')
+            self.assertFalse(report['overall_decision'])
+
+    def test_conclusion_rejects_nonfinite_gate_overrides_cleanly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);self.fixture(root)
+            for value in ('NaN','Infinity','-Infinity'):
+                with self.subTest(value=value):
+                    (root/'gates.json').write_text('{"initial_mask_iou_min":'+value+'}')
+                    process=subprocess.run([sys.executable,str(CONCLUDE),str(root),'--gates',str(root/'gates.json')],capture_output=True,text=True)
+                    self.assertEqual(process.returncode,2)
+                    self.assertIn('gates must be known names',process.stderr)
+                    self.assertNotIn('Traceback',process.stderr)
+                    self.assertFalse((root/'first_round_conclusion.json').exists())
     def test_gaussian_comparison_is_measured_from_frames_and_read_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); rec=self.fixture(root)

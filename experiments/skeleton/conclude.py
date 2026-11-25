@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 
 from check import check
@@ -36,6 +37,7 @@ def conclude(root, thresholds=None):
     road_gate = decision(road, limits['road_false_positive_ratio_max'], evidence=sound and checks.get('obstacle_road_ratio') is True)
     if (road_gate is False and road is not None and limits['road_false_positive_ratio_max'] is not None
             and road > limits['road_false_positive_ratio_max'] and checks.get('obstacle_road_ratio') is True
+            and checks.get('obstacle_parameters') is True and checks.get('obstacle_collision_mode') is True
             and fallback and proxy_usable):
         road_gate = True
     cases = metrics.get('impulse_cases', {})
@@ -64,11 +66,11 @@ def conclude(root, thresholds=None):
     }
     decisions = [entry['decision'] for entry in conditions.values()]
     report = {'schema': 1, 'source_run_sha256': hashlib.sha256((root / 'run.json').read_bytes()).hexdigest(),
-              'source_integrity_passed': sound, 'conditions': conditions,
+              'source_integrity_passed': sound, 'pipeline_checker_passed': checked['passed'], 'conditions': conditions,
               'vehicle_size_check': {'reasonable': size.get('reasonable', '未设'), 'fit_to_reference_ratio': size.get('fit_to_reference_ratio'),
                                      'note': '车型尺寸核对独立于四条失败条件'},
               'timings_s': {'total': '未设', **record.get('timings_s', {})},
-              'overall_decision': False if not sound else (True if all(v is True for v in decisions) else ('未设' if '未设' in decisions and all(v is True or v == '未设' for v in decisions) else False))}
+              'overall_decision': False if checked['passed'] is not True else (True if all(v is True for v in decisions) else ('未设' if '未设' in decisions and all(v is True or v == '未设' for v in decisions) else False))}
     # The digest covers every report field except the digest itself.
     canonical = json.dumps(report, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
     report['content_sha256'] = hashlib.sha256(canonical).hexdigest()
@@ -83,7 +85,7 @@ if __name__ == '__main__':
     parser.add_argument('--gates', type=Path, help='JSON overrides; null means 未设')
     args = parser.parse_args()
     overrides = json.loads(args.gates.read_text()) if args.gates else None
-    if overrides and (set(overrides) - set(THRESHOLDS) or any(v is not None and (not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0) for v in overrides.values())):
+    if overrides and (set(overrides) - set(THRESHOLDS) or any(v is not None and (not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v) or v < 0) for v in overrides.values())):
         parser.error('gates must be known names with nonnegative numeric values or null')
     result = conclude(args.run_dir.resolve(), overrides)
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))

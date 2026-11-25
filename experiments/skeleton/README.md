@@ -11,11 +11,14 @@ Obstacle options: `--obstacle-height 0.35` (metres above the fitted plane),
 `--obstacle-min-pixels 3` (DA3 votes per grid cell), and
 `--obstacle-min-cells 2` (four-connected component size). The
 `--obstacles-render-only` switch keeps obstacle meshes and instance IDs in the
-proxy render while excluding their collision shapes. `obstacles.npz` stores
-the component ID grid, cell tops, road denominator, and car footprint.
+proxy render while excluding their collision shapes. `heightmap.npz` stores
+separate ground and observed surface height layers, surface vote counts, and
+provenance (1 observed DA3, 2 fitted plane, 3 car fill). `obstacles.npz` stores
+the component ID grid, candidate cells, road denominator, and car footprint.
 `scene.json` and `run.json` record the settings, each component's cell count,
-the road false positive ratio, and the collision mode. The checker recomputes
-those measurements from the saved grid and inspects the first rendered ID frame.
+the road false positive ratio, and actual PyBullet collision shape counts. The
+checker recomputes those measurements from the saved grid and checks every
+obstacle ID across all rendered frames, reporting any missing IDs.
 
 The run command consumes the existing metric DA3 depth and camera, SAM-derived car mask, and original image. It fits the near-road plane, forms height-map cells from near metric depth back-projections and far ray/plane intersections, records per-cell provenance, fills the car footprint with that plane, places a box from the car mask and depth, applies a 3 m/s sliding impulse, simulates in PyBullet, and renders fixed-camera depth and instance ID frames. The PNG depth values are millimetres for visible geometry; zero marks no entity or invalid depth. ID values are 0 for outside, 1 for ground, 2 for car. Frame 0 is stationary before the impulse. `initial_projection.json` stores pixel-run evidence from that rendered frame and the resized SAM mask; the checker recomputes bbox/IoU and checks improvement against the published 6075606 baseline IoU of 0.3749. Two MP4 files provide contrast-scaled previews. `run.json` lists source and output hashes, per-stage input/output hashes, parameters, versions, timings, and simulation measurements. The checker only reads files.
 

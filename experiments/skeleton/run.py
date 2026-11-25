@@ -125,24 +125,28 @@ def build(args):
     oi,oj,oz = oi[selected],oj[selected],oz[selected]
     votes = np.zeros((n,n),dtype=np.int32)
     tops = np.full((n,n),flat_z,dtype=np.float64)
+    surface_provenance=np.full((n,n),2,dtype=np.uint8)  # 1 observed, 2 plane, 3 car fill
+    np.maximum.at(tops,(oj,oi),oz)
+    surface_provenance[oj,oi]=1
+    surface_provenance[car_grid]=3
+    tops[car_grid]=flat_z
     raised = oz-flat_z > args.obstacle_height
     np.add.at(votes,(oj[raised],oi[raised]),1)
-    np.maximum.at(tops,(oj[raised],oi[raised]),oz[raised])
-    candidates = valid_grid & ~car_grid & (votes >= args.obstacle_min_pixels)
+    candidates = valid_grid & ~car_grid & (tops-flat_z > args.obstacle_height) & (votes >= args.obstacle_min_pixels)
     component_ids = np.zeros((n,n),dtype=np.uint16)
+    visited = np.zeros((n,n),dtype=bool)
     components = []
     for j in range(n):
         for i in range(n):
-            if not candidates[j,i] or component_ids[j,i]:
+            if not candidates[j,i] or visited[j,i]:
                 continue
-            cells=[]; stack=[(j,i)]; component_ids[j,i]=65535
+            cells=[]; stack=[(j,i)]; visited[j,i]=True
             while stack:
                 cy,cx=stack.pop(); cells.append((cy,cx))
                 for ny,nx in ((cy-1,cx),(cy+1,cx),(cy,cx-1),(cy,cx+1)):
-                    if 0<=ny<n and 0<=nx<n and candidates[ny,nx] and not component_ids[ny,nx]:
-                        component_ids[ny,nx]=65535;stack.append((ny,nx))
+                    if 0<=ny<n and 0<=nx<n and candidates[ny,nx] and not visited[ny,nx]:
+                        visited[ny,nx]=True;stack.append((ny,nx))
             if len(cells) < args.obstacle_min_cells:
-                for cy,cx in cells: component_ids[cy,cx]=0
                 continue
             instance_id=len(components)+3
             if instance_id>=65535:
@@ -159,7 +163,7 @@ def build(args):
     road_count=int(road_cells.sum())
     road_false=int(np.count_nonzero(road_cells & (component_ids>0)))
     false_ratio=road_false/road_count if road_count else None
-    np.savez_compressed(out/'obstacles.npz',instance_id=component_ids,top_z_m=tops.astype(np.float32),candidate=candidates.astype(np.uint8),road_cells=road_cells.astype(np.uint8),car_footprint=car_grid.astype(np.uint8))
+    np.savez_compressed(out/'obstacles.npz',instance_id=component_ids,candidate=candidates.astype(np.uint8),road_cells=road_cells.astype(np.uint8),car_footprint=car_grid.astype(np.uint8))
     for j in range(n-1):
         for i in range(n-1):
             q = j*n+i
@@ -167,7 +171,7 @@ def build(args):
                 indices.extend([q,q+1,q+n,q+1,q+n+1,q+n])
     if not indices:
         raise ValueError('empty scene sector')
-    np.savez_compressed(out/'heightmap.npz', z_m=grid_z.astype(np.float32), valid=np.asarray(valid,dtype=np.uint8).reshape(n,n), provenance=provenance)
+    np.savez_compressed(out/'heightmap.npz', z_m=grid_z.astype(np.float32), ground_z_m=grid_z.astype(np.float32), surface_z_m=tops.astype(np.float32), valid=valid_grid.astype(np.uint8), provenance=provenance, surface_provenance=surface_provenance, surface_votes=votes)
     # The visible car is excluded from both mesh and collision generation; the fitted
     # plane spans its footprint, including pixels hidden by the original car.
     ys_car, xs_car = np.nonzero(car)
@@ -259,7 +263,10 @@ def build(args):
             for component,(mesh_vertices,mesh_indices) in zip(components,obstacle_meshes):
                 collision=-1 if args.obstacles_render_only else p.createCollisionShape(p.GEOM_MESH,vertices=mesh_vertices,indices=mesh_indices,flags=p.GEOM_FORCE_CONCAVE_TRIMESH)
                 visual=p.createVisualShape(p.GEOM_MESH,vertices=mesh_vertices,indices=mesh_indices,rgbaColor=[.1,.5,.1,1])
-                obstacle_bodies[p.createMultiBody(0,collision,visual)]=component['instance_id']
+                obstacle_body=p.createMultiBody(0,collision,visual)
+                if collision != -1:
+                    p.changeDynamics(obstacle_body,-1,lateralFriction=0,restitution=0)
+                obstacle_bodies[obstacle_body]=component['instance_id']
             walls = []
             # Radial arc and two sector edges are collision-only static segments.
             segments = []
@@ -278,6 +285,12 @@ def build(args):
             p.changeDynamics(body,-1,lateralFriction=args.friction,restitution=0,linearDamping=0,angularDamping=0)
             return ground, body, obstacle_bodies
         ground, body, obstacle_bodies = create_world()
+        shape_counts={instance_id:len(p.getCollisionShapeData(obstacle_body)) for obstacle_body,instance_id in obstacle_bodies.items()}
+        for component in components:
+            component['collision_shape_count']=shape_counts[component['instance_id']]
+            if bool(component['collision_shape_count'])==args.obstacles_render_only:
+                raise RuntimeError('obstacle collision shape disagrees with fallback mode')
+        write_json(out/'scene.json',scene)
         def trajectory():
             pos,quat=p.getBasePositionAndOrientation(body)
             vel,omega=p.getBaseVelocity(body)

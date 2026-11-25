@@ -18,6 +18,11 @@ when a probe fails: an import or CUDA failure can occur before a run record is
 written. Record that failure, versions, and the alternative before continuing
 dependent issues.
 
+The physics record checks the full final second against the flat ground's
+expected 0.2 m center height. It reports maximum absolute height error and
+maximum ground contact penetration; each has an explicit 0.01 m tolerance.
+Both PyBullet probes record the installed package version and the API version.
+
 Capability decisions remain pending the host run. If PyBullet fails the
 heightfield or convex hull checks, evaluate MuJoCo's heightfield and convex
 mesh support. If gsplat cannot carry four feature channels, use separate

@@ -1,6 +1,7 @@
 """Independent headless mesh and heightfield-mesh depth/ID probe."""
 import hashlib
 import argparse
+from importlib.metadata import version
 import json
 import platform
 import sys
@@ -42,7 +43,7 @@ def main():
         path = out / "depth_ids.npz"
         np.savez(path, depth_m=depth.astype(np.float32), instance_id=ids)
         values, counts = np.unique(ids, return_counts=True)
-        result = {"command": [sys.executable, str(Path(__file__).resolve()), str(out.resolve())], "python": platform.python_version(), "pybullet_api_version": p.getAPIVersion(), "renderer": "PyBullet TinyRenderer DIRECT", "seconds": time.perf_counter() - started, "outputs": {path.name: hashlib.sha256(path.read_bytes()).hexdigest()}, "id_pixel_counts": {str(k): int(v) for k, v in zip(values, counts)}, "finite_depth": bool(np.isfinite(depth).all()), "foreground_depth_range_m": [float(depth[ids >= 0].min()), float(depth[ids >= 0].max())] if (ids >= 0).any() else None, "passed": ground in values and box in values and bool(np.isfinite(depth).all()) and bool((depth[ids >= 0] < far).all())}
+        result = {"command": [sys.executable, str(Path(__file__).resolve()), str(out.resolve())], "python": platform.python_version(), "pybullet_package_version": version("pybullet"), "pybullet_api_version": p.getAPIVersion(), "renderer": "PyBullet TinyRenderer DIRECT", "seconds": time.perf_counter() - started, "outputs": {path.name: hashlib.sha256(path.read_bytes()).hexdigest()}, "id_pixel_counts": {str(k): int(v) for k, v in zip(values, counts)}, "finite_depth": bool(np.isfinite(depth).all()), "foreground_depth_range_m": [float(depth[ids >= 0].min()), float(depth[ids >= 0].max())] if (ids >= 0).any() else None, "passed": ground in values and box in values and bool(np.isfinite(depth).all()) and bool((depth[ids >= 0] < far).all())}
         (out / "run.json").write_text(json.dumps(result, indent=2) + "\n")
         print(json.dumps(result, indent=2))
         if not result["passed"]:

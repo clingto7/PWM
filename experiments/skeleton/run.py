@@ -285,7 +285,7 @@ def build(args):
             p.changeDynamics(body,-1,lateralFriction=args.friction,restitution=0,linearDamping=0,angularDamping=0)
             return ground, body, obstacle_bodies
         ground, body, obstacle_bodies = create_world()
-        shape_counts={instance_id:len(p.getCollisionShapeData(obstacle_body)) for obstacle_body,instance_id in obstacle_bodies.items()}
+        shape_counts={instance_id:len(p.getCollisionShapeData(obstacle_body,-1)) for obstacle_body,instance_id in obstacle_bodies.items()}
         for component in components:
             component['collision_shape_count']=shape_counts[component['instance_id']]
             if bool(component['collision_shape_count'])==args.obstacles_render_only:

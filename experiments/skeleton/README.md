@@ -20,6 +20,11 @@ New runs use schema 2 and require all three cases; the checker continues to
 accept historical schema 1 runs against their original checks. Linear final
 speed keeps its measured m/s gate. Angular final speed is reported separately
 in rad/s with its gate unset until the first A800 measurement.
+PyBullet combines the ground and car lateral friction multiplicatively. The
+ground uses the nominal coefficient and the car uses 1.0, so the effective
+coast coefficient matches the recorded nominal value. The obstacle impulse
+is sized from estimated distance to first contact plus a small arrival speed,
+avoiding the large overspeed seen in the first A800 measurement.
 
 Obstacle options: `--obstacle-height 0.35` (metres above the fitted plane),
 `--obstacle-min-pixels 3` (DA3 votes per grid cell), and

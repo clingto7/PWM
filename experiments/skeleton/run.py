@@ -1,4 +1,4 @@
-"""Build the first-image scene, static obstacles, and one sliding impulse run."""
+"""Build the first-image scene and three center-of-mass impulse runs."""
 import argparse
 import hashlib
 import json
@@ -296,18 +296,35 @@ def build(args):
             p.changeDynamics(body,-1,lateralFriction=args.friction,restitution=0,linearDamping=0,angularDamping=0)
             return ground, body, obstacle_bodies
         ground, body, obstacle_bodies = create_world()
+        inertia_diagonal=list(p.getDynamicsInfo(body,-1)[2])
         shape_counts={instance_id:len(p.getCollisionShapeData(obstacle_body,-1)) for obstacle_body,instance_id in obstacle_bodies.items()}
         for component in components:
             component['collision_shape_count']=shape_counts[component['instance_id']]
             if bool(component['collision_shape_count'])==args.obstacles_render_only:
                 raise RuntimeError('obstacle collision shape disagrees with fallback mode')
         write_json(out/'scene.json',scene)
-        def trajectory():
+        targets=[]
+        for cy,cx in np.argwhere(component_ids>0):
+            x,y=origin_x+cx*args.cell,cy*args.cell
+            distance=math.hypot(x-car_pos[0],y-car_pos[1])
+            if distance>max(width,length) and tops[cy,cx]>car_pos[2]:
+                targets.append((distance,x,y,int(component_ids[cy,cx])))
+        obstacle_target=min(targets) if targets else None
+        if obstacle_target:
+            distance,x,y,target_id=obstacle_target
+            direction=np.array([x-car_pos[0],y-car_pos[1],0.])/distance
+            obstacle_speed=min(15.,max(args.speed,math.sqrt(2*args.friction*9.81*distance)*1.4))
+        else:
+            direction=np.array([0.,1.,0.]);obstacle_speed=args.speed;target_id=None
+        impulses={'coast':[0.,args.speed,0.], 'ballistic':[0.,args.speed,args.ballistic_up_speed], 'obstacle':(direction*obstacle_speed).tolist()}
+        specifications={name:{'delta_velocity_m_s':velocity,'magnitude_n_s':mass*math.sqrt(sum(v*v for v in velocity)), 'direction':(np.asarray(velocity)/math.sqrt(sum(v*v for v in velocity))).tolist(),'application_point':'center_of_mass','application_point_world_m':car_pos,'target_obstacle_id':target_id if name=='obstacle' else None} for name,velocity in impulses.items()}
+        def trajectory(velocity):
             pos,quat=p.getBasePositionAndOrientation(body)
             vel,omega=p.getBaseVelocity(body)
             rows=[[ *pos,*quat,*vel,*omega ]]
             penetration=0.0
-            p.resetBaseVelocity(body,linearVelocity=[0,args.speed,0])
+            obstacle_contacts={}
+            p.resetBaseVelocity(body,linearVelocity=velocity)
             for step in range(int(args.seconds*240)-1):
                 p.stepSimulation()
                 pos,quat=p.getBasePositionAndOrientation(body)
@@ -315,15 +332,27 @@ def build(args):
                 rows.append([*pos,*quat,*vel,*omega])
                 contacts=p.getContactPoints(bodyA=body)
                 penetration=max(penetration,max([0]+[-float(q[8]) for q in contacts]))
-            return rows,penetration
-        rows,penetration=trajectory()
-        p.disconnect(client)
-        client = p.connect(p.DIRECT)
-        ground, body, obstacle_bodies = create_world()
-        replay,_=trajectory()
-        replay_identical=rows==replay
-        write_json(out/'trajectory.json',rows)
-        write_json(out/'replay_trajectory.json',replay)
+                for q in contacts:
+                    if q[2] in obstacle_bodies:
+                        instance_id=obstacle_bodies[q[2]]
+                        obstacle_contacts[instance_id]=obstacle_contacts.get(instance_id,0)+1
+            return rows,penetration,obstacle_contacts
+        trajectories={};penetrations={};replays={};hits={}
+        for name,velocity in impulses.items():
+            if name!='coast':
+                p.disconnect(client);client=p.connect(p.DIRECT)
+                ground,body,obstacle_bodies=create_world()
+            case_rows,penetrations[name],hits[name]=trajectory(velocity)
+            p.disconnect(client);client=p.connect(p.DIRECT)
+            ground,body,obstacle_bodies=create_world()
+            replay,_,_=trajectory(velocity)
+            trajectories[name]=case_rows;replays[name]=replay
+            prefix='' if name=='coast' else name+'/'
+            if name!='coast': (out/name).mkdir()
+            write_json(out/(prefix+'trajectory.json'),case_rows)
+            write_json(out/(prefix+'replay_trajectory.json'),replay)
+        rows=trajectories['coast'];penetration=penetrations['coast'];replay_identical=rows==replays['coast']
+        write_json(out/'impulses.json',specifications)
         sim_time=time.perf_counter()-sim_start
         render_start=time.perf_counter()
         near,far=.1,max(100,args.radius*4)
@@ -387,12 +416,27 @@ def build(args):
         render_time=time.perf_counter()-render_start
     finally:
         p.disconnect(client)
+    def in_camera(row):
+        rotation=np.asarray(p.getMatrixFromQuaternion(row[3:7])).reshape(3,3)
+        for dx in (-width/2,width/2):
+            for dy in (-length/2,length/2):
+                for dz in (-box_h/2,box_h/2):
+                    point=np.asarray(row[:3])+rotation@np.asarray([dx,dy,dz])
+                    px,py,pz=point[0]*right+point[1]*forward+point[2]*normal
+                    if py<=0 or not (0<=k[0,0]*px/py+k[0,2]<w and 0<=-k[1,1]*pz/py+k[1,2]<h):
+                        return False
+        return True
+    ballistic_visible=all(in_camera(row) for row in trajectories['ballistic'])
     outputs={str(path.relative_to(out)):digest(path) for path in sorted(out.rglob('*')) if path.is_file()}
-    record={'schema':2 if args.render_gaussians else 1,'inputs':{name:{'path':str(path.resolve()),'sha256':hashes[name]} for name,path in inputs.items()},'outputs':outputs,'parameters':{'radius_m':args.radius,'angle_deg':args.angle,'cell_m':args.cell,'friction':args.friction,'density_kg_m3':args.density,'derived_mass_kg':mass,'near_depth_m':args.near_depth,'ground_inlier_m':args.ground_inlier,'speed_m_s':args.speed,'seconds':args.seconds,'physics_hz':240,'obstacle_height_m':args.obstacle_height,'obstacle_min_pixels':args.obstacle_min_pixels,'obstacle_min_cells':args.obstacle_min_cells,'obstacles_render_only':args.obstacles_render_only,'video_fps':30},'timings_s':{'ground_fit':ground_time,'scene_build':scene_time,'simulation_and_replay':sim_time,'render_and_video':render_time,'total':time.perf_counter()-start},'versions':{'python':platform.python_version(),'numpy':version('numpy'),'pillow':version('pillow'),'pybullet':version('pybullet'),'pybullet_api':p.getAPIVersion(),'ffmpeg':subprocess.check_output(['ffmpeg','-version'],text=True).splitlines()[0]},'measurements':{'max_contact_penetration_m':penetration,'replay_trajectory_identical':replay_identical,'final_position_m':rows[-1][:3],'final_velocity_m_s':rows[-1][7:10],'initial_projection_bbox_xyxy':actual_bbox,'initial_projection_mask_iou':projection_evidence['mask_iou'],'mesh_fit':mesh_fit,'road_false_positive_ratio':false_ratio,'road_false_positive_cells':road_false,'road_cells':road_count,'obstacle_component_sizes_cells':[component['cells'] for component in components],'obstacle_component_count':len(components)}}
+    record={'schema':2,'inputs':{name:{'path':str(path.resolve()),'sha256':hashes[name]} for name,path in inputs.items()},'outputs':outputs,'parameters':{'radius_m':args.radius,'angle_deg':args.angle,'cell_m':args.cell,'friction':args.friction,'density_kg_m3':args.density,'derived_mass_kg':mass,'near_depth_m':args.near_depth,'ground_inlier_m':args.ground_inlier,'speed_m_s':args.speed,'seconds':args.seconds,'physics_hz':240,'obstacle_height_m':args.obstacle_height,'obstacle_min_pixels':args.obstacle_min_pixels,'obstacle_min_cells':args.obstacle_min_cells,'obstacles_render_only':args.obstacles_render_only,'video_fps':30},'timings_s':{'ground_fit':ground_time,'scene_build':scene_time,'simulation_and_replay':sim_time,'render_and_video':render_time,'total':time.perf_counter()-start},'versions':{'python':platform.python_version(),'numpy':version('numpy'),'pillow':version('pillow'),'pybullet':version('pybullet'),'pybullet_api':p.getAPIVersion(),'ffmpeg':subprocess.check_output(['ffmpeg','-version'],text=True).splitlines()[0]},'measurements':{'max_contact_penetration_m':penetration,'replay_trajectory_identical':replay_identical,'final_position_m':rows[-1][:3],'final_velocity_m_s':rows[-1][7:10],'initial_projection_bbox_xyxy':actual_bbox,'initial_projection_mask_iou':projection_evidence['mask_iou'],'mesh_fit':mesh_fit,'road_false_positive_ratio':false_ratio,'road_false_positive_cells':road_false,'road_cells':road_count,'obstacle_component_sizes_cells':[component['cells'] for component in components],'obstacle_component_count':len(components)}}
     record['stages'] = {
         'ground_fit_scene': {'inputs': hashes, 'outputs': {name:outputs[name] for name in ('scene.json','heightmap.npz','fitted_car.obj','car_collision_hull.obj','obstacles.npz')}, 'parameters': {'radius_m':args.radius,'angle_deg':args.angle,'cell_m':args.cell,'near_depth_m':args.near_depth,'ground_inlier_m':args.ground_inlier,'obstacle_height_m':args.obstacle_height,'obstacle_min_pixels':args.obstacle_min_pixels,'obstacle_min_cells':args.obstacle_min_cells,'obstacles_render_only':args.obstacles_render_only}, 'seconds':ground_time+scene_time},
         'simulation_replay': {'inputs': {'scene.json':outputs['scene.json'],'heightmap.npz':outputs['heightmap.npz'],'fitted_car.obj':outputs['fitted_car.obj'],'car_collision_hull.obj':outputs['car_collision_hull.obj'],'obstacles.npz':outputs['obstacles.npz']}, 'outputs': {name:outputs[name] for name in ('trajectory.json','replay_trajectory.json')}, 'parameters': {'density_kg_m3':args.density,'derived_mass_kg':mass,'friction':args.friction,'speed_m_s':args.speed,'physics_hz':240,'obstacles_render_only':args.obstacles_render_only}, 'seconds':sim_time},
         'proxy_render_video': {'inputs': {'scene.json':outputs['scene.json'],'heightmap.npz':outputs['heightmap.npz'],'trajectory.json':outputs['trajectory.json'],'obstacles.npz':outputs['obstacles.npz'],'fitted_car.obj':outputs['fitted_car.obj']}, 'outputs': {name:hashval for name,hashval in outputs.items() if name.startswith(('depth/','instance_id/')) or name in ('depth.mp4','instance_id.mp4','initial_projection.json')}, 'parameters': {'fps':30,'width':w,'height':h,'camera':'original fixed DA3'}, 'seconds':render_time}}
+    record['impulse_cases']={name:{'trajectory':('' if name=='coast' else name+'/')+'trajectory.json','replay':('' if name=='coast' else name+'/')+'replay_trajectory.json','impulse':specifications[name],'inertia_diagonal_kg_m2':inertia_diagonal,'max_contact_penetration_m':penetrations[name],'obstacle_contact_samples_by_id':hits[name]} for name in impulses}
+    record['parameters']['ballistic_up_speed_m_s']=args.ballistic_up_speed
+    record['measurements']['ballistic_in_camera']=ballistic_visible
+    record['stages']['simulation_replay']['outputs'].update({name:outputs[name] for name in outputs if name.startswith(('ballistic/','obstacle/')) or name=='impulses.json'})
     record['raster_frame_times_s']=raster_frame_times
     if args.render_gaussians:
         record['required_renderers']=['raster','gaussian']
@@ -411,6 +455,7 @@ if __name__=='__main__':
     parser.add_argument('--friction',type=float,default=.6)
     parser.add_argument('--density',type=float,default=500)
     parser.add_argument('--speed',type=float,default=3)
+    parser.add_argument('--ballistic-up-speed',type=float,default=2)
     parser.add_argument('--near-depth',type=float,default=18)
     parser.add_argument('--ground-inlier',type=float,default=.15)
     parser.add_argument('--obstacle-height',type=float,default=.35)
@@ -420,7 +465,7 @@ if __name__=='__main__':
     parser.add_argument('--seconds',type=float,default=5)
     parser.add_argument('--render-gaussians',action='store_true',help='also render geometric gsplat frames (requires CUDA)')
     args=parser.parse_args()
-    values=(args.radius,args.angle,args.cell,args.near_depth,args.ground_inlier,args.obstacle_height,args.friction,args.density,args.speed,args.seconds)
+    values=(args.radius,args.angle,args.cell,args.near_depth,args.ground_inlier,args.obstacle_height,args.friction,args.density,args.speed,args.ballistic_up_speed,args.seconds)
     if not (all(math.isfinite(value) for value in values) and 0 < args.radius <= 100 and 0 < args.angle < 180 and 0 < args.cell <= args.radius/2 and 0 < args.near_depth <= args.radius and 0 < args.ground_inlier <= 2 and 0 < args.obstacle_height <= 10 and 1 <= args.obstacle_min_pixels <= 1000 and 1 <= args.obstacle_min_cells <= 1000 and 0 <= args.friction <= 2 and 0 < args.density <= 10000 and 0 < args.speed <= 100 and 0 < args.seconds <= 60 and int(args.seconds*240) >= 1 and int(args.seconds*30) >= 1):
         parser.error('invalid parameter range: require positive radius/cell/density/speed/duration/inlier; angle (0,180), near-depth <= radius, friction [0,2], and at least one physics and video frame')
     build(args)

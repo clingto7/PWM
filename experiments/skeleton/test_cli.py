@@ -29,7 +29,7 @@ class CheckCliTest(unittest.TestCase):
             for name in ('heightmap.npz','obstacles.npz','fitted_car.obj'):
                 (root/name).write_bytes(b'fixture')
                 rec['outputs'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
-            rec['schema']=2
+            rec['schema']=1
             rec['required_renderers']=['raster','gaussian']
             rec['gaussian']={'sampling':{'method':'geometry only','seed':42,'no_optimization':True},'entity_counts':{'1':2,'2':3,'3':1},'frame_times_s':[.02], 'raster_frame_times_s':[.01], 'alpha_threshold':.1,'feature_method':'one-hot RGB+ED','depth_method':'expected optical depth'}
             gaussian_outputs={name:hashval for name,hashval in rec['outputs'].items() if name.startswith('gaussian_')}
@@ -64,7 +64,7 @@ class CheckCliTest(unittest.TestCase):
     def test_requested_gaussian_run_cannot_pass_without_stage_or_frames(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);rec=self.fixture(root)
-            rec['schema']=2;rec['required_renderers']=['raster','gaussian']
+            rec['schema']=1;rec['required_renderers']=['raster','gaussian']
             (root/'run.json').write_text(json.dumps(rec))
             result=self.invoke(root)
             self.assertNotEqual(result.returncode,0)
@@ -81,7 +81,7 @@ class CheckCliTest(unittest.TestCase):
         projection={'reference_runs_y_x0_x1':[[1,1,3]],'rendered_runs_y_x0_x1':[[1,1,3]],'reference_bbox_xyxy':[1,1,3,2],'rendered_bbox_xyxy':[1,1,3,2],'intersection_pixels':2,'union_pixels':2,'mask_iou':1.0,'frame':'instance_id/0000.png'}
         (root/'initial_projection.json').write_text(json.dumps(projection))
         files=['initial_projection.json','scene.json','trajectory.json','replay_trajectory.json','depth/0000.png','instance_id/0000.png']
-        rec={'outputs':{name:hashlib.sha256((root/name).read_bytes()).hexdigest() for name in files},'inputs':{},'parameters':{'seconds':1/30,'video_fps':30,'radius_m':27,'angle_deg':95},'measurements':{'max_contact_penetration_m':0,'replay_trajectory_identical':True,'initial_projection_bbox_xyxy':[1,1,3,2],'initial_projection_mask_iou':1.0}}
+        rec={'schema':1,'outputs':{name:hashlib.sha256((root/name).read_bytes()).hexdigest() for name in files},'inputs':{},'parameters':{'seconds':1/30,'video_fps':30,'radius_m':27,'angle_deg':95},'measurements':{'max_contact_penetration_m':0,'replay_trajectory_identical':True,'initial_projection_bbox_xyxy':[1,1,3,2],'initial_projection_mask_iou':1.0}}
         rec['stages']={'scene':{'inputs':{},'outputs':{'scene.json':rec['outputs']['scene.json']}}}
         (root/'run.json').write_text(json.dumps(rec))
         return rec
@@ -149,7 +149,9 @@ class CheckCliTest(unittest.TestCase):
             for name in ('instance_id/0000.png','instance_id/0001.png','depth/0001.png'):
                 rec['outputs'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
             (root/'run.json').write_text(json.dumps(rec))
-            report=json.loads(self.invoke(root).stdout)
+            result=self.invoke(root)
+            self.assertTrue(result.stdout,result.stderr)
+            report=json.loads(result.stdout)
             self.assertTrue(report['checks']['obstacle_render_ids'])
             self.assertEqual(report['metrics']['missing_obstacle_render_ids'],[])
             Image.fromarray(np.array([[1,2,0]],dtype=np.uint16)).save(root/'instance_id/0001.png')
@@ -169,6 +171,16 @@ class CheckCliTest(unittest.TestCase):
             self.assertTrue(report['checks']['penetration'])
             self.assertTrue(report['checks']['replay'])
             self.assertEqual(before,{str(p):p.read_bytes() for p in root.rglob('*') if p.is_file()})
+
+    def test_schema_two_requires_three_cases_and_impulse_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);rec=self.fixture(root)
+            self.assertEqual(self.invoke(root).returncode,0)
+            rec['schema']=2
+            (root/'run.json').write_text(json.dumps(rec))
+            result=self.invoke(root)
+            self.assertNotEqual(result.returncode,0)
+            self.assertFalse(json.loads(result.stdout)['checks']['three_case_record'])
 
     def test_rejects_tampered_trajectory_even_if_metrics_claim_success(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -259,6 +271,66 @@ class CheckCliTest(unittest.TestCase):
             self.assertNotEqual(result.returncode,0)
             self.assertFalse(json.loads(result.stdout)['checks']['penetration'])
 
+    def test_three_case_checker_reports_independent_analytic_errors_and_replay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);rec=self.obstacle_fixture(root)
+            rec['schema']=2
+            scene=json.loads((root/'scene.json').read_text())
+            scene['camera']={'forward':[0,1,0],'up':[0,0,1],'intrinsics':[[100,0,252],[0,100,140],[0,0,1]]}
+            (root/'scene.json').write_text(json.dumps(scene))
+            rec['outputs']['scene.json']=hashlib.sha256((root/'scene.json').read_bytes()).hexdigest()
+            rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
+            rec['parameters'].update({'derived_mass_kg':1000,'friction':.5})
+            initial=[0,0,.5,0,0,0,1,0,0,0,0,0,0]
+            coast=[initial]+[[0,min(i/240,.8),.5,0,0,0,1,0,0,0,0,0,0] for i in range(1,241)]
+            ballistic=[initial]
+            for i in range(1,241):
+                t=i/240
+                airborne=t<2/9.81
+                ballistic.append([0,t if airborne else .2,.5+max(0,t-9.81*t*t/2) if airborne else .5,0,0,0,1,0,1 if airborne else 0,1-9.81*t if airborne else 0,0,0,0])
+            obstacle=[initial]+[[min(i/240,.2),0,.5,0,0,0,1,0,0,0,0,0,0] for i in range(1,241)]
+            specs={}
+            for name,rows,velocity,target in (('coast',coast,[0,1,0],None),('ballistic',ballistic,[0,1,1],None),('obstacle',obstacle,[1,0,0],3)):
+                prefix='' if name=='coast' else name+'/'
+                (root/name).mkdir(exist_ok=True) if prefix else None
+                for filename in ('trajectory.json','replay_trajectory.json'):
+                    path=root/(prefix+filename);path.write_text(json.dumps(rows))
+                    rec['outputs'][prefix+filename]=hashlib.sha256(path.read_bytes()).hexdigest()
+                magnitude=1000*sum(v*v for v in velocity)**.5
+                specs[name]={'delta_velocity_m_s':velocity,'magnitude_n_s':magnitude,'direction':[v/(magnitude/1000) for v in velocity],'application_point':'center_of_mass','application_point_world_m':[0,0,.5],'target_obstacle_id':target}
+                rec.setdefault('impulse_cases',{})[name]={'trajectory':prefix+'trajectory.json','replay':prefix+'replay_trajectory.json','impulse':specs[name],'inertia_diagonal_kg_m2':[100,100,100],'max_contact_penetration_m':0,'obstacle_contact_samples_by_id':{'3':1} if name=='obstacle' else {}}
+            (root/'impulses.json').write_text(json.dumps(specs))
+            rec['outputs']['impulses.json']=hashlib.sha256((root/'impulses.json').read_bytes()).hexdigest()
+            (root/'run.json').write_text(json.dumps(rec))
+            result=self.invoke(root)
+            self.assertTrue(result.stdout,result.stderr)
+            report=json.loads(result.stdout)
+            cases=report['metrics']['impulse_cases']
+            self.assertAlmostEqual(cases['coast']['metrics']['expected_distance_m'],1/9.81)
+            self.assertAlmostEqual(cases['ballistic']['metrics']['expected_flight_time_s'],2/9.81)
+            self.assertEqual(cases['ballistic']['checks']['analytical_flight'],'未设')
+            self.assertLess(cases['ballistic']['metrics']['max_prelanding_vertical_residual_m'],.01)
+            self.assertTrue(cases['obstacle']['checks']['solid_target'])
+            self.assertEqual(cases['coast']['checks']['analytical_distance'],'未设')
+            self.assertGreater(cases['coast']['metrics']['distance_error_m'],.5)
+            for filename in ('trajectory.json','replay_trajectory.json'):
+                path=root/'obstacle'/filename
+                changed=json.loads(path.read_text());changed[-1][10]=2
+                path.write_text(json.dumps(changed))
+                rec['outputs']['obstacle/'+filename]=hashlib.sha256(path.read_bytes()).hexdigest()
+            (root/'run.json').write_text(json.dumps(rec))
+            report=json.loads(self.invoke(root).stdout)
+            angular=report['metrics']['impulse_cases']['obstacle']
+            self.assertEqual(angular['metrics']['final_speed_m_s'],0)
+            self.assertEqual(angular['metrics']['final_angular_speed_rad_s'],2)
+            self.assertTrue(angular['checks']['final_rest'])
+            self.assertEqual(angular['checks']['final_angular_rest'],'未设')
+            replay=json.loads((root/'obstacle/replay_trajectory.json').read_text());replay[-1][0]=.3
+            (root/'obstacle/replay_trajectory.json').write_text(json.dumps(replay))
+            rec['outputs']['obstacle/replay_trajectory.json']=hashlib.sha256((root/'obstacle/replay_trajectory.json').read_bytes()).hexdigest()
+            (root/'run.json').write_text(json.dumps(rec))
+            report=json.loads(self.invoke(root).stdout)
+            self.assertFalse(report['metrics']['impulse_cases']['obstacle']['checks']['replay'])
     def test_rejects_changed_mesh_artifact_through_run_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);rec=self.fixture(root)
@@ -348,6 +420,10 @@ class PipelineObstacleTest(unittest.TestCase):
                 self.assertEqual(run.returncode,0,run.stderr+run.stdout)
                 checked=subprocess.run([sys.executable,str(CHECK),str(root)],capture_output=True,text=True)
                 report=json.loads(checked.stdout)
+                scene=json.loads((root/'scene.json').read_text())
+                projection=json.loads((root/'initial_projection.json').read_text())
+                self.assertEqual(projection['reference_bbox_xyxy'],scene['car']['box_fit']['reference_bbox_xyxy'])
+                self.assertTrue(report['checks']['initial_projection_record'],checked.stdout)
                 self.assertTrue(all(report['checks'][key] for key in ('obstacle_parameters','obstacle_components','obstacle_heightmap','obstacle_road_ratio','car_footprint_clear','obstacle_render_ids','obstacle_collision_mode')),checked.stdout)
                 self.assertTrue(all((count==0)==report['metrics']['obstacles_render_only'] for count in report['metrics']['obstacle_collision_shape_counts']))
                 reports.append(report)

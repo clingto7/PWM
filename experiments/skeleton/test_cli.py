@@ -54,6 +54,8 @@ class CheckCliTest(unittest.TestCase):
         for name in ('scene.json','heightmap.npz','obstacles.npz','instance_id/0000.png'):
             rec['outputs'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
         rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
+        rec['stages']['simulation_replay']={'inputs':{'obstacles.npz':rec['outputs']['obstacles.npz']},'outputs':{}}
+        rec['stages']['proxy_render_video']={'inputs':{'obstacles.npz':rec['outputs']['obstacles.npz']},'outputs':{}}
         (root/'run.json').write_text(json.dumps(rec))
         return rec
 
@@ -202,6 +204,83 @@ class CheckCliTest(unittest.TestCase):
             result=self.invoke(root)
             self.assertNotEqual(result.returncode,0)
             self.assertFalse(json.loads(result.stdout)['checks']['penetration'])
+
+    def test_rejects_changed_mesh_artifact_through_run_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);rec=self.fixture(root)
+            (root/'fitted_car.obj').write_text('v 0 0 0\n')
+            rec['outputs']['fitted_car.obj']=hashlib.sha256((root/'fitted_car.obj').read_bytes()).hexdigest()
+            (root/'run.json').write_text(json.dumps(rec))
+            (root/'fitted_car.obj').write_text('v 1 0 0\n')
+            result=self.invoke(root)
+            self.assertNotEqual(result.returncode,0)
+            self.assertFalse(json.loads(result.stdout)['checks']['hashes'])
+
+    def test_mesh_run_records_fit_hull_and_actual_first_frame(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest('Pillow is required for PNG seam fixture')
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);rec=self.fixture(root)
+            im=Image.new('L',(4,4),0);im.putpixel((1,1),2);im.putpixel((2,1),2)
+            im.save(root/'instance_id/0000.png')
+            fit={'scale':1.0,'yaw_rad':0.0,'position_m':[0,0,.5], 'size_m':[1,2,1],
+                 'size_check':{'reasonable':True,'fit_to_reference_ratio':[1,1,1]}}
+            scene=json.loads((root/'scene.json').read_text())
+            scene['car'].update(mesh_fit=fit,collision_shape='convex hull of fitted Hunyuan mesh')
+            (root/'scene.json').write_text(json.dumps(scene))
+            rec['measurements']['mesh_fit']=fit
+            rec['inputs']['hunyuan_mesh']={'path':str(root/'source.glb'),'sha256':hashlib.sha256(b'mesh').hexdigest()}
+            (root/'source.glb').write_bytes(b'mesh')
+            for name in ('fitted_car.obj','car_collision_hull.obj'):
+                (root/name).write_text('v 0 0 0\n')
+            for name in ('scene.json','instance_id/0000.png','fitted_car.obj','car_collision_hull.obj'):
+                rec['outputs'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
+            rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
+            rec['stages']['simulation_replay']={'inputs':{name:rec['outputs'][name] for name in ('fitted_car.obj','car_collision_hull.obj')},'outputs':{}}
+            rec['stages']['proxy_render_video']={'inputs':{'fitted_car.obj':rec['outputs']['fitted_car.obj']},'outputs':{}}
+            (root/'run.json').write_text(json.dumps(rec))
+            good=self.invoke(root)
+            self.assertEqual(good.returncode,0,good.stderr+good.stdout)
+            self.assertTrue(json.loads(good.stdout)['checks']['rendered_silhouette_record'])
+            del rec['stages']['simulation_replay']['inputs']['car_collision_hull.obj']
+            (root/'run.json').write_text(json.dumps(rec))
+            missing=self.invoke(root)
+            self.assertFalse(json.loads(missing.stdout)['checks']['mesh_stage_provenance'])
+            rec['stages']['simulation_replay']['inputs']['car_collision_hull.obj']=rec['outputs']['car_collision_hull.obj']
+            im.putpixel((2,1),0);im.save(root/'instance_id/0000.png')
+            rec['outputs']['instance_id/0000.png']=hashlib.sha256((root/'instance_id/0000.png').read_bytes()).hexdigest()
+            (root/'run.json').write_text(json.dumps(rec))
+            bad=self.invoke(root)
+            self.assertFalse(json.loads(bad.stdout)['checks']['rendered_silhouette_record'])
+
+    def test_combined_mesh_and_obstacle_run_at_checker_seam(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);rec=self.obstacle_fixture(root)
+            ids=np.array([[3,3,0,0],[1,2,2,0]],dtype=np.uint16)
+            Image.fromarray(ids).save(root/'instance_id/0000.png')
+            fit={'scale':1.0,'yaw_rad':0.0,'position_m':[0,0,.5], 'size_m':[1,2,1],
+                 'size_check':{'reasonable':True,'fit_to_reference_ratio':[1,1,1]}}
+            scene=json.loads((root/'scene.json').read_text())
+            scene['car'].update(mesh_fit=fit,collision_shape='convex hull of fitted Hunyuan mesh')
+            (root/'scene.json').write_text(json.dumps(scene))
+            rec['measurements']['mesh_fit']=fit
+            (root/'source.glb').write_bytes(b'mesh')
+            rec['inputs']['hunyuan_mesh']={'path':str(root/'source.glb'),'sha256':hashlib.sha256(b'mesh').hexdigest()}
+            for name in ('fitted_car.obj','car_collision_hull.obj'):
+                (root/name).write_text('v 0 0 0\n')
+            for name in ('scene.json','instance_id/0000.png','fitted_car.obj','car_collision_hull.obj'):
+                rec['outputs'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
+            rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
+            rec['stages']['simulation_replay']={'inputs':{name:rec['outputs'][name] for name in ('fitted_car.obj','car_collision_hull.obj','obstacles.npz')},'outputs':{}}
+            rec['stages']['proxy_render_video']={'inputs':{name:rec['outputs'][name] for name in ('fitted_car.obj','obstacles.npz')},'outputs':{}}
+            (root/'run.json').write_text(json.dumps(rec))
+            report=json.loads(self.invoke(root).stdout)
+            self.assertTrue(report['passed'],report)
+            self.assertTrue(report['checks']['mesh_stage_provenance'])
+            self.assertTrue(report['checks']['rendered_silhouette_record'])
+            self.assertTrue(report['checks']['obstacle_render_ids'])
 
 
 @unittest.skipUnless(os.environ.get('PWM_RUN_INTEGRATION')=='1','requires the pinned PyBullet first-image environment')

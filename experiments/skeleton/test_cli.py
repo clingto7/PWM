@@ -277,20 +277,22 @@ class CheckCliTest(unittest.TestCase):
             rec['schema']=2
             scene=json.loads((root/'scene.json').read_text())
             scene['camera']={'forward':[0,1,0],'up':[0,0,1],'intrinsics':[[100,0,252],[0,100,140],[0,0,1]]}
+            scene['contact_friction']={'ground_lateral_friction':.5,'car_lateral_friction':1.0,'effective_ground_car_friction':.5,'obstacle_lateral_friction':0.0}
+            scene['physics_sleep']={'car_activation_state':'enable_sleeping','activation_state_value':1}
             (root/'scene.json').write_text(json.dumps(scene))
             rec['outputs']['scene.json']=hashlib.sha256((root/'scene.json').read_bytes()).hexdigest()
             rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
-            rec['parameters'].update({'derived_mass_kg':1000,'friction':.5})
+            rec['parameters'].update({'derived_mass_kg':1000,'friction':.5,'car_lateral_friction':1.0,'effective_ground_car_friction':.5,'car_sleep_activation_state':'enable_sleeping','obstacle_min_speed_m_s':6})
             initial=[0,0,.5,0,0,0,1,0,0,0,0,0,0]
             coast=[initial]+[[0,min(i/240,.8),.5,0,0,0,1,0,0,0,0,0,0] for i in range(1,241)]
             ballistic=[initial]
             for i in range(1,241):
                 t=i/240
-                airborne=t<2/9.81
-                ballistic.append([0,t if airborne else .2,.5+max(0,t-9.81*t*t/2) if airborne else .5,0,0,0,1,0,1 if airborne else 0,1-9.81*t if airborne else 0,0,0,0])
+                airborne=t<4/9.81
+                ballistic.append([0,t if airborne else .4,.5+max(0,2*t-9.81*t*t/2) if airborne else .5,0,0,0,1,0,1 if airborne else 0,2-9.81*t if airborne else 0,0,0,0])
             obstacle=[initial]+[[min(i/240,.2),0,.5,0,0,0,1,0,0,0,0,0,0] for i in range(1,241)]
             specs={}
-            for name,rows,velocity,target in (('coast',coast,[0,1,0],None),('ballistic',ballistic,[0,1,1],None),('obstacle',obstacle,[1,0,0],3)):
+            for name,rows,velocity,target in (('coast',coast,[0,1,0],None),('ballistic',ballistic,[0,1,2],None),('obstacle',obstacle,[1,0,0],3)):
                 prefix='' if name=='coast' else name+'/'
                 (root/name).mkdir(exist_ok=True) if prefix else None
                 for filename in ('trajectory.json','replay_trajectory.json'):
@@ -307,12 +309,61 @@ class CheckCliTest(unittest.TestCase):
             report=json.loads(result.stdout)
             cases=report['metrics']['impulse_cases']
             self.assertAlmostEqual(cases['coast']['metrics']['expected_distance_m'],1/9.81)
-            self.assertAlmostEqual(cases['ballistic']['metrics']['expected_flight_time_s'],2/9.81)
-            self.assertEqual(cases['ballistic']['checks']['analytical_flight'],'未设')
+            self.assertAlmostEqual(cases['ballistic']['metrics']['expected_flight_time_s'],4/9.81)
+            self.assertTrue(cases['ballistic']['checks']['analytical_flight'])
             self.assertLess(cases['ballistic']['metrics']['max_prelanding_vertical_residual_m'],.01)
             self.assertTrue(cases['obstacle']['checks']['solid_target'])
-            self.assertEqual(cases['coast']['checks']['analytical_distance'],'未设')
+            self.assertFalse(cases['coast']['checks']['analytical_distance'])
             self.assertGreater(cases['coast']['metrics']['distance_error_m'],.5)
+            def altered_case(name,modify):
+                path=root/(('' if name=='coast' else name+'/')+'trajectory.json')
+                original=path.read_bytes()
+                rows=json.loads(original);modify(rows)
+                path.write_text(json.dumps(rows))
+                rec['outputs'][str(path.relative_to(root))]=hashlib.sha256(path.read_bytes()).hexdigest()
+                (root/'run.json').write_text(json.dumps(rec))
+                result=self.invoke(root)
+                self.assertTrue(result.stdout,result.stderr)
+                report=json.loads(result.stdout)
+                path.write_bytes(original)
+                rec['outputs'][str(path.relative_to(root))]=hashlib.sha256(original).hexdigest()
+                (root/'run.json').write_text(json.dumps(rec))
+                return report['metrics']['impulse_cases'][name]
+            expected_coast=1/9.81
+            near=altered_case('coast',lambda rows:rows[-1].__setitem__(1,expected_coast+.019))
+            far=altered_case('coast',lambda rows:rows[-1].__setitem__(1,expected_coast+.021))
+            self.assertTrue(near['checks']['analytical_distance'])
+            self.assertFalse(far['checks']['analytical_distance'])
+            landing=int(cases['ballistic']['metrics']['flight_time_s']*240)
+            range_near=altered_case('ballistic',lambda rows:rows[landing].__setitem__(1,4/9.81+.049))
+            range_far=altered_case('ballistic',lambda rows:rows[landing].__setitem__(1,4/9.81+.051))
+            self.assertTrue(range_near['checks']['analytical_flight'])
+            self.assertFalse(range_far['checks']['analytical_flight'])
+            z_near=altered_case('ballistic',lambda rows:rows[20].__setitem__(2,rows[20][2]+.009))
+            z_far=altered_case('ballistic',lambda rows:rows[20].__setitem__(2,rows[20][2]+.011))
+            self.assertTrue(z_near['checks']['analytical_flight'])
+            self.assertFalse(z_far['checks']['analytical_flight'])
+            xy_near=altered_case('ballistic',lambda rows:rows[20].__setitem__(1,rows[20][1]+.9e-6))
+            xy_far=altered_case('ballistic',lambda rows:rows[20].__setitem__(1,rows[20][1]+1.1e-6))
+            self.assertTrue(xy_near['checks']['analytical_flight'])
+            self.assertFalse(xy_far['checks']['analytical_flight'])
+            def land_at(index):
+                def change(rows):
+                    for row in rows[index:]:row[2]=.5
+                return change
+            time_near=altered_case('ballistic',land_at(94))
+            time_far=altered_case('ballistic',land_at(92))
+            self.assertTrue(time_near['checks']['analytical_flight'])
+            self.assertFalse(time_far['checks']['analytical_flight'])
+            angular_near=altered_case('obstacle',lambda rows:rows[-1].__setitem__(10,.0009))
+            angular_far=altered_case('obstacle',lambda rows:rows[-1].__setitem__(10,.0011))
+            self.assertTrue(angular_near['checks']['final_angular_rest'])
+            self.assertFalse(angular_far['checks']['final_angular_rest'])
+            rec['parameters']['effective_ground_car_friction']=.36
+            (root/'run.json').write_text(json.dumps(rec))
+            mismatched=json.loads(self.invoke(root).stdout)
+            self.assertFalse(mismatched['metrics']['impulse_cases']['coast']['checks']['friction_record'])
+            rec['parameters']['effective_ground_car_friction']=.5
             for filename in ('trajectory.json','replay_trajectory.json'):
                 path=root/'obstacle'/filename
                 changed=json.loads(path.read_text());changed[-1][10]=2
@@ -324,7 +375,7 @@ class CheckCliTest(unittest.TestCase):
             self.assertEqual(angular['metrics']['final_speed_m_s'],0)
             self.assertEqual(angular['metrics']['final_angular_speed_rad_s'],2)
             self.assertTrue(angular['checks']['final_rest'])
-            self.assertEqual(angular['checks']['final_angular_rest'],'未设')
+            self.assertFalse(angular['checks']['final_angular_rest'])
             replay=json.loads((root/'obstacle/replay_trajectory.json').read_text());replay[-1][0]=.3
             (root/'obstacle/replay_trajectory.json').write_text(json.dumps(replay))
             rec['outputs']['obstacle/replay_trajectory.json']=hashlib.sha256((root/'obstacle/replay_trajectory.json').read_bytes()).hexdigest()

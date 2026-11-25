@@ -13,9 +13,82 @@ from PIL import Image
 
 CHECK=Path(__file__).with_name('check.py')
 RUN=CHECK.with_name('run.py')
+CONCLUDE=CHECK.with_name('conclude.py')
 
 
 class CheckCliTest(unittest.TestCase):
+    def test_conclusion_cli_hash_unset_gates_and_timing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);rec=self.fixture(root)
+            rec['timings_s']={'ground_fit':1.25,'total':4.5}
+            (root/'run.json').write_text(json.dumps(rec))
+            (root/'gates.json').write_text(json.dumps({'initial_mask_iou_min':None,'road_false_positive_ratio_max':None}))
+            process=subprocess.run([sys.executable,str(CONCLUDE),str(root),'--gates',str(root/'gates.json')],capture_output=True,text=True)
+            self.assertEqual(process.returncode,1,process.stderr)
+            report=json.loads((root/'first_round_conclusion.json').read_text())
+            digest=report.pop('content_sha256')
+            canonical=json.dumps(report,ensure_ascii=False,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
+            self.assertEqual(digest,hashlib.sha256(canonical).hexdigest())
+            self.assertEqual(report['conditions']['vehicle_silhouette']['decision'],'未设')
+            self.assertEqual(report['conditions']['ground_fit']['decision'],True)
+            self.assertEqual(report['conditions']['road_obstacles']['decision'],'未设')
+            self.assertEqual(report['conditions']['solver']['decision'],'未设')
+            self.assertEqual(report['overall_decision'],'未设')
+            self.assertEqual(report['timings_s']['total'],4.5)
+
+    def test_conclusion_preserves_failed_size_check_and_detects_tampering(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);rec=self.fixture(root)
+            scene=json.loads((root/'scene.json').read_text())
+            scene['car']['mesh_fit']={'size_check':{'reasonable':False,'fit_to_reference_ratio':[.665,.601,.635]}}
+            (root/'scene.json').write_text(json.dumps(scene))
+            rec['outputs']['scene.json']=hashlib.sha256((root/'scene.json').read_bytes()).hexdigest()
+            rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
+            (root/'run.json').write_text(json.dumps(rec))
+            process=subprocess.run([sys.executable,str(CONCLUDE),str(root)],capture_output=True,text=True)
+            # Legacy fixture has no Hunyuan input, so size evidence is reported without mesh checks.
+            self.assertEqual(process.returncode,1,process.stderr)
+            report=json.loads((root/'first_round_conclusion.json').read_text())
+            self.assertFalse(report['vehicle_size_check']['reasonable'])
+            (root/'depth/0000.png').write_bytes(b'tampered')
+            subprocess.run([sys.executable,str(CONCLUDE),str(root)],capture_output=True,text=True)
+            report=json.loads((root/'first_round_conclusion.json').read_text())
+            self.assertFalse(report['source_integrity_passed'])
+            self.assertFalse(report['conditions']['ground_fit']['decision'])
+
+    def test_conclusion_records_render_only_proxy_usability(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);self.obstacle_fixture(root,render_only=True)
+            process=subprocess.run([sys.executable,str(CONCLUDE),str(root)],capture_output=True,text=True)
+            self.assertEqual(process.returncode,1,process.stderr)
+            road=json.loads((root/'first_round_conclusion.json').read_text())['conditions']['road_obstacles']
+            self.assertEqual(road['false_positive_ratio'],0)
+            self.assertTrue(road['render_only_fallback'])
+            self.assertTrue(road['proxy_signal_usable'])
+            self.assertTrue(road['decision'])
+
+    def test_conclusion_fallback_requires_render_only_and_proxy_evidence(self):
+        for render_only in (False, True):
+            with self.subTest(render_only=render_only),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);rec=self.obstacle_fixture(root,render_only)
+                with np.load(root/'obstacles.npz') as data:
+                    arrays={key:data[key] for key in data.files}
+                arrays['road_cells'][:]=0;arrays['road_cells'][0,0]=1
+                np.savez_compressed(root/'obstacles.npz',**arrays)
+                scene=json.loads((root/'scene.json').read_text())
+                scene['obstacles'].update(road_false_positive_cells=1,road_cells=1,road_false_positive_ratio=1.0)
+                (root/'scene.json').write_text(json.dumps(scene))
+                rec['measurements'].update(road_false_positive_cells=1,road_cells=1,road_false_positive_ratio=1.0)
+                for name in ('scene.json','obstacles.npz'):
+                    rec['outputs'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
+                rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
+                for stage in ('simulation_replay','proxy_render_video'):
+                    rec['stages'][stage]['inputs']['obstacles.npz']=rec['outputs']['obstacles.npz']
+                (root/'run.json').write_text(json.dumps(rec))
+                subprocess.run([sys.executable,str(CONCLUDE),str(root)],capture_output=True,text=True)
+                report=json.loads((root/'first_round_conclusion.json').read_text())
+                self.assertEqual(report['conditions']['road_obstacles']['decision'],render_only)
+
     def fixture(self,root):
         root.mkdir(exist_ok=True)
         (root/'depth').mkdir();(root/'instance_id').mkdir()

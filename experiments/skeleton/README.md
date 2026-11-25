@@ -5,7 +5,18 @@ Run in the pinned first-image environment, with `ffmpeg` on `PATH`:
 ```sh
 python experiments/skeleton/run.py /path/to/new-run
 python experiments/skeleton/check.py /path/to/new-run
+python experiments/skeleton/conclude.py /path/to/new-run
 ```
+
+The conclusion command writes `first_round_conclusion.json` in the run
+directory. Its `content_sha256` hashes canonical JSON without that digest
+field, and `source_run_sha256` identifies the run record. Prototype gates in
+`gates.py` use the accepted first-image IoU 0.831735 to set a 0.80 minimum
+(3.17 percentage points of margin), and the measured 0/52 road false positives
+to set a 0.02 maximum (about one road cell). These bounds apply to this scene,
+not to general image accuracy. `--gates overrides.json` can set a gate to
+`null`, which displays `未设` and never passes. The size reasonableness check
+is reported separately from the four failure conditions.
 
 The run writes a coast trajectory at the root and separate
 `ballistic/` and `obstacle/` trajectories, each with a replay. `impulses.json`

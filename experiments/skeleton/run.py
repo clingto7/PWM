@@ -291,7 +291,7 @@ def build(args):
                 shape = p.createCollisionShape(p.GEOM_BOX,halfExtents=[math.hypot(dx,dy)/2,.04,.5])
                 walls.append(p.createMultiBody(0,shape,basePosition=mid,baseOrientation=p.getQuaternionFromEuler([0,0,math.atan2(dy,dx)])))
             shape = p.createCollisionShape(p.GEOM_MESH, vertices=hull.vertices.tolist())
-            visual = p.createVisualShape(p.GEOM_MESH, vertices=fitted_mesh.vertices.tolist(), indices=fitted_mesh.faces.ravel().tolist(), rgbaColor=[1,0,0,1])
+            visual = p.createVisualShape(p.GEOM_MESH, fileName=str(out/'fitted_car.obj'), rgbaColor=[1,0,0,1])
             body = p.createMultiBody(mass,shape,visual,basePosition=car_pos,baseOrientation=car_orientation)
             p.changeDynamics(body,-1,lateralFriction=args.friction,restitution=0,linearDamping=0,angularDamping=0)
             return ground, body, obstacle_bodies

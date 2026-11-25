@@ -70,7 +70,8 @@ def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, 
     points = local * scale
     # Export local mesh in body coordinates; base pose puts wheel/contact plane on ground.
     points[:,2] -= (points[:,2].max()+points[:,2].min())/2
-    fitted = trimesh.Trimesh(vertices=points, faces=mesh.faces, process=False)
+    # Swapping Y and Z reflects handedness; reverse winding for outward normals.
+    fitted = trimesh.Trimesh(vertices=points, faces=mesh.faces[:, ::-1], process=False)
     size = (span*scale).tolist()
     ratios = [size[i]/REAL_SIZE_M[i] for i in range(3)]
     return fitted, {'scale':scale, 'yaw_rad':yaw, 'position_m':[x,y,ground_z+size[2]/2],

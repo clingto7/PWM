@@ -163,10 +163,17 @@ class CheckCliTest(unittest.TestCase):
             for name in ('scene.json','instance_id/0000.png','fitted_car.obj','car_collision_hull.obj'):
                 rec['outputs'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
             rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
+            rec['stages']['simulation_replay']={'inputs':{name:rec['outputs'][name] for name in ('fitted_car.obj','car_collision_hull.obj')},'outputs':{}}
+            rec['stages']['proxy_render_video']={'inputs':{'fitted_car.obj':rec['outputs']['fitted_car.obj']},'outputs':{}}
             (root/'run.json').write_text(json.dumps(rec))
             good=self.invoke(root)
             self.assertEqual(good.returncode,0,good.stderr+good.stdout)
             self.assertTrue(json.loads(good.stdout)['checks']['rendered_silhouette_record'])
+            del rec['stages']['simulation_replay']['inputs']['car_collision_hull.obj']
+            (root/'run.json').write_text(json.dumps(rec))
+            missing=self.invoke(root)
+            self.assertFalse(json.loads(missing.stdout)['checks']['mesh_stage_provenance'])
+            rec['stages']['simulation_replay']['inputs']['car_collision_hull.obj']=rec['outputs']['car_collision_hull.obj']
             im.putpixel((2,1),0);im.save(root/'instance_id/0000.png')
             rec['outputs']['instance_id/0000.png']=hashlib.sha256((root/'instance_id/0000.png').read_bytes()).hexdigest()
             (root/'run.json').write_text(json.dumps(rec))

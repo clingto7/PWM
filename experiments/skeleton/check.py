@@ -72,6 +72,12 @@ def check(root):
     if 'hunyuan_mesh' in record['inputs']:
         fit=box['mesh_fit']
         size=fit['size_m']
+        stages=record.get('stages',{})
+        required={'simulation_replay':('fitted_car.obj','car_collision_hull.obj'),
+                  'proxy_render_video':('fitted_car.obj',)}
+        checks['mesh_stage_provenance']=all(
+            stages.get(stage,{}).get('inputs',{}).get(name)==record['outputs'].get(name)
+            for stage,names in required.items() for name in names)
         checks['mesh_record']=all(name in record['outputs'] for name in ('fitted_car.obj','car_collision_hull.obj')) and fit==m['mesh_fit'] and all(math.isfinite(v) and v>0 for v in size) and math.isfinite(fit['scale']) and fit['scale']>0 and box['collision_shape']=='convex hull of fitted Hunyuan mesh'
         checks['mesh_ground_contact']=abs(fit['position_m'][2]-size[2]/2-surface)<.01
         checks['size_reasonableness_record']=fit['size_check']['reasonable']==all(.7<=v<=1.3 for v in fit['size_check']['fit_to_reference_ratio'])

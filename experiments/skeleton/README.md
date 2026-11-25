@@ -16,6 +16,10 @@ contact and penetration, plus the shared rest, energy, replay, and camera checks
 The checker reports analytical errors and pre-landing parabola residuals with
 the acceptance gate marked `未设` until the first A800 measurements establish
 evidence-based limits. An unset gate does not count as a pass.
+New runs use schema 2 and require all three cases; the checker continues to
+accept historical schema 1 runs against their original checks. Linear final
+speed keeps its measured m/s gate. Angular final speed is reported separately
+in rad/s with its gate unset until the first A800 measurement.
 
 Obstacle options: `--obstacle-height 0.35` (metres above the fitted plane),
 `--obstacle-min-pixels 3` (DA3 votes per grid cell), and

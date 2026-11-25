@@ -27,7 +27,7 @@ class CheckCliTest(unittest.TestCase):
         projection={'reference_runs_y_x0_x1':[[1,1,3]],'rendered_runs_y_x0_x1':[[1,1,3]],'reference_bbox_xyxy':[1,1,3,2],'rendered_bbox_xyxy':[1,1,3,2],'intersection_pixels':2,'union_pixels':2,'mask_iou':1.0,'frame':'instance_id/0000.png'}
         (root/'initial_projection.json').write_text(json.dumps(projection))
         files=['initial_projection.json','scene.json','trajectory.json','replay_trajectory.json','depth/0000.png','instance_id/0000.png']
-        rec={'outputs':{name:hashlib.sha256((root/name).read_bytes()).hexdigest() for name in files},'inputs':{},'parameters':{'seconds':1/30,'video_fps':30,'radius_m':27,'angle_deg':95},'measurements':{'max_contact_penetration_m':0,'replay_trajectory_identical':True,'initial_projection_bbox_xyxy':[1,1,3,2],'initial_projection_mask_iou':1.0}}
+        rec={'schema':1,'outputs':{name:hashlib.sha256((root/name).read_bytes()).hexdigest() for name in files},'inputs':{},'parameters':{'seconds':1/30,'video_fps':30,'radius_m':27,'angle_deg':95},'measurements':{'max_contact_penetration_m':0,'replay_trajectory_identical':True,'initial_projection_bbox_xyxy':[1,1,3,2],'initial_projection_mask_iou':1.0}}
         rec['stages']={'scene':{'inputs':{},'outputs':{'scene.json':rec['outputs']['scene.json']}}}
         (root/'run.json').write_text(json.dumps(rec))
         return rec
@@ -65,7 +65,7 @@ class CheckCliTest(unittest.TestCase):
                 root=Path(tmp);self.obstacle_fixture(root,render_only)
                 before={str(p):p.read_bytes() for p in root.rglob('*') if p.is_file()}
                 result=self.invoke(root)
-                self.assertEqual(result.returncode,1,result.stdout+result.stderr)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
                 report=json.loads(result.stdout)
                 self.assertEqual(report['metrics']['obstacle_component_sizes_cells'],[2])
                 self.assertEqual(report['metrics']['obstacle_rendered_ids'],[3])
@@ -110,11 +110,21 @@ class CheckCliTest(unittest.TestCase):
             root=Path(tmp);self.fixture(root)
             before={str(p):p.read_bytes() for p in root.rglob('*') if p.is_file()}
             result=self.invoke(root)
-            self.assertEqual(result.returncode,1,result.stderr+result.stdout)
+            self.assertEqual(result.returncode,0,result.stderr+result.stdout)
             report=json.loads(result.stdout)
             self.assertTrue(report['checks']['penetration'])
             self.assertTrue(report['checks']['replay'])
             self.assertEqual(before,{str(p):p.read_bytes() for p in root.rglob('*') if p.is_file()})
+
+    def test_schema_two_requires_three_cases_and_impulse_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);rec=self.fixture(root)
+            self.assertEqual(self.invoke(root).returncode,0)
+            rec['schema']=2
+            (root/'run.json').write_text(json.dumps(rec))
+            result=self.invoke(root)
+            self.assertNotEqual(result.returncode,0)
+            self.assertFalse(json.loads(result.stdout)['checks']['three_case_record'])
 
     def test_rejects_tampered_trajectory_even_if_metrics_claim_success(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -208,6 +218,7 @@ class CheckCliTest(unittest.TestCase):
     def test_three_case_checker_reports_independent_analytic_errors_and_replay(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);rec=self.obstacle_fixture(root)
+            rec['schema']=2
             scene=json.loads((root/'scene.json').read_text())
             scene['camera']={'forward':[0,1,0],'up':[0,0,1],'intrinsics':[[100,0,252],[0,100,140],[0,0,1]]}
             (root/'scene.json').write_text(json.dumps(scene))
@@ -244,6 +255,18 @@ class CheckCliTest(unittest.TestCase):
             self.assertTrue(cases['obstacle']['checks']['solid_target'])
             self.assertEqual(cases['coast']['checks']['analytical_distance'],'未设')
             self.assertGreater(cases['coast']['metrics']['distance_error_m'],.5)
+            for filename in ('trajectory.json','replay_trajectory.json'):
+                path=root/'obstacle'/filename
+                changed=json.loads(path.read_text());changed[-1][10]=2
+                path.write_text(json.dumps(changed))
+                rec['outputs']['obstacle/'+filename]=hashlib.sha256(path.read_bytes()).hexdigest()
+            (root/'run.json').write_text(json.dumps(rec))
+            report=json.loads(self.invoke(root).stdout)
+            angular=report['metrics']['impulse_cases']['obstacle']
+            self.assertEqual(angular['metrics']['final_speed_m_s'],0)
+            self.assertEqual(angular['metrics']['final_angular_speed_rad_s'],2)
+            self.assertTrue(angular['checks']['final_rest'])
+            self.assertEqual(angular['checks']['final_angular_rest'],'未设')
             replay=json.loads((root/'obstacle/replay_trajectory.json').read_text());replay[-1][0]=.3
             (root/'obstacle/replay_trajectory.json').write_text(json.dumps(replay))
             rec['outputs']['obstacle/replay_trajectory.json']=hashlib.sha256((root/'obstacle/replay_trajectory.json').read_bytes()).hexdigest()
@@ -287,7 +310,7 @@ class CheckCliTest(unittest.TestCase):
             rec['stages']['proxy_render_video']={'inputs':{'fitted_car.obj':rec['outputs']['fitted_car.obj']},'outputs':{}}
             (root/'run.json').write_text(json.dumps(rec))
             good=self.invoke(root)
-            self.assertEqual(good.returncode,1,good.stderr+good.stdout)
+            self.assertEqual(good.returncode,0,good.stderr+good.stdout)
             self.assertTrue(json.loads(good.stdout)['checks']['rendered_silhouette_record'])
             del rec['stages']['simulation_replay']['inputs']['car_collision_hull.obj']
             (root/'run.json').write_text(json.dumps(rec))
@@ -322,7 +345,7 @@ class CheckCliTest(unittest.TestCase):
             rec['stages']['proxy_render_video']={'inputs':{name:rec['outputs'][name] for name in ('fitted_car.obj','obstacles.npz')},'outputs':{}}
             (root/'run.json').write_text(json.dumps(rec))
             report=json.loads(self.invoke(root).stdout)
-            self.assertFalse(report['passed'],report)
+            self.assertTrue(report['passed'],report)
             self.assertTrue(report['checks']['mesh_stage_provenance'])
             self.assertTrue(report['checks']['rendered_silhouette_record'])
             self.assertTrue(report['checks']['obstacle_render_ids'])

@@ -12,7 +12,7 @@ from pathlib import Path
 # prototype gates, not claims of model accuracy or statistical tolerances.
 BASELINE_INITIAL_MASK_IOU = 0.3749  # published 6075606 first-frame surrogate
 THRESHOLDS = {'penetration_m': 0.01, 'resting_height_error_m': 0.01, 'final_speed_m_s': 0.001, 'energy_gain_j_kg': 0.001, 'ground_fit_rms_m': 0.01,
-              'coast_distance_error_m':None,'flight_time_error_s':None,'range_error_m':None,'parabola_vertical_residual_m':None,'parabola_horizontal_residual_m':None}
+              'final_angular_speed_rad_s':None,'coast_distance_error_m':None,'flight_time_error_s':None,'range_error_m':None,'parabola_vertical_residual_m':None,'parabola_horizontal_residual_m':None}
 
 def check(root):
     record=json.loads((root/'run.json').read_text())
@@ -140,10 +140,12 @@ def check(root):
         checks['obstacle_collision_mode']=all(c['collision_enabled']==(not obstacles['render_only']) and (c['collision_shape_count']>0)==(not obstacles['render_only']) for c in components)
         metrics.update({'road_false_positive_ratio':ratio,'road_false_positive_cells':false_count,'road_cells':road_count,'obstacle_component_sizes_cells':sizes,'obstacle_rendered_ids':sorted(image_ids & expected_ids),'missing_obstacle_render_ids':missing_ids,'obstacle_collision_shape_counts':[c['collision_shape_count'] for c in components],'obstacles_render_only':obstacles['render_only']})
     cases_record=record.get('impulse_cases',{})
-    checks['three_case_record']=set(cases_record)=={'coast','ballistic','obstacle'} and 'impulses.json' in record['outputs'] and (root/'impulses.json').is_file() and all(
+    schema=record.get('schema',1)
+    if schema>=2:
+        checks['three_case_record']=set(cases_record)=={'coast','ballistic','obstacle'} and 'impulses.json' in record['outputs'] and (root/'impulses.json').is_file() and all(
         all(key in case and case[key] in record['outputs'] and (root/case[key]).is_file() for key in ('trajectory','replay'))
         for case in cases_record.values())
-    if checks['three_case_record']:
+    if schema>=2 and checks['three_case_record']:
         cases={}
         impulses=json.loads((root/'impulses.json').read_text())
         for name in ('coast','ballistic','obstacle'):
@@ -165,17 +167,19 @@ def check(root):
             energy=[specific_energy(row) for row in rows[1:]]
             gain=max([0]+[b-a for a,b in zip(energy,energy[1:])])
             last=rows[-1]
-            end_speed=math.sqrt(sum(v*v for v in last[7:13]))
+            end_linear_speed=math.sqrt(sum(v*v for v in last[7:10]))
+            end_angular_speed=math.sqrt(sum(v*v for v in last[10:13]))
             max_angular_speed=max(math.sqrt(sum(v*v for v in row[10:13])) for row in rows)
             penetration=case['max_contact_penetration_m']
             case_checks={'impulse_record':case['impulse']==impulse and impulse['application_point']=='center_of_mass' and impulse['application_point_world_m']==box['initial_position_m'] and math.isclose(impulse['magnitude_n_s'],params['derived_mass_kg']*speed,rel_tol=1e-9) and all(math.isclose(a,b/speed,abs_tol=1e-9) for a,b in zip(impulse['direction'],delta)),
                          'initial_stationary':rows[0][:3]==box['initial_position_m'] and all(abs(v)<1e-12 for v in rows[0][7:13]),
                          'penetration':penetration<=limits['penetration_m'],
-                         'final_rest':end_speed<=limits['final_speed_m_s'] and abs(last[2]-box['size_m'][2]/2-surface)<=limits['resting_height_error_m'],
+                         'final_rest':end_linear_speed<=limits['final_speed_m_s'] and abs(last[2]-box['size_m'][2]/2-surface)<=limits['resting_height_error_m'],
+                         'final_angular_rest':gate(end_angular_speed,limits['final_angular_speed_rad_s']),
                          'inertia_record':inertia is not None and len(inertia)==3 and all(v>0 for v in inertia),
                          'no_energy_gain':gain<=limits['energy_gain_j_kg'] and inertia is not None,
                          'replay':rows==again}
-            case_metrics={'max_penetration_m':penetration,'final_speed_m_s':end_speed,'max_angular_speed_rad_s':max_angular_speed,'max_step_specific_energy_gain_j_kg':gain}
+            case_metrics={'max_penetration_m':penetration,'final_speed_m_s':end_linear_speed,'final_angular_speed_rad_s':end_angular_speed,'max_angular_speed_rad_s':max_angular_speed,'max_step_specific_energy_gain_j_kg':gain}
             if name=='coast':
                 expected=speed**2/(2*params['friction']*9.81) if params['friction'] else math.inf
                 actual=math.hypot(last[0]-rows[0][0],last[1]-rows[0][1])

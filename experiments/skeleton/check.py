@@ -236,6 +236,50 @@ def check(root):
             cases[name]={'checks':case_checks,'metrics':case_metrics,'passed':all(value is True or (isinstance(value,str) and value=='不适用') for value in case_checks.values())}
         checks['impulse_cases']=all(case['passed'] for case in cases.values())
         metrics['impulse_cases']=cases
+    gaussian_required='gaussian' in record.get('required_renderers',[])
+    if gaussian_required and 'gaussian' not in record:
+        checks['gaussian_required']=False
+    if 'gaussian' in record:
+        import numpy as np
+        from PIL import Image
+        gaussian=record['gaussian']
+        frames=int(params['seconds']*params['video_fps'])
+        gaussian_directories=('gaussian_depth','gaussian_instance_id','gaussian_edge_mixing')
+        frame_files_present=all((root/directory/f'{frame:04d}.png').is_file() for directory in gaussian_directories for frame in range(frames))
+        depth_error_sum=0.0;depth_error_count=0;depth_error_max=0.0
+        intersections={};unions={}
+        cracks=0;edge_mix=0; raster_foreground=0; gaussian_foreground=0
+        matching_shapes=frame_files_present
+        for frame in range(frames) if frame_files_present else ():
+            name=f'{frame:04d}.png'
+            arrays=[np.asarray(Image.open(root/directory/name)) for directory in ('instance_id','depth','gaussian_instance_id','gaussian_depth','gaussian_edge_mixing')]
+            raster_id,raster_depth,gaussian_id,gaussian_depth,mixed=arrays
+            matching_shapes &= all(array.shape==raster_id.shape for array in arrays)
+            if 'image_size_wh' in gaussian:
+                matching_shapes &= list(raster_id.shape[::-1])==gaussian['image_size_wh']
+            foreground=raster_id>0; generated=gaussian_id>0
+            raster_foreground+=int(foreground.sum());gaussian_foreground+=int(generated.sum())
+            cracks+=int(np.count_nonzero(foreground & ~generated))
+            edge_mix+=int(np.count_nonzero(mixed>0))
+            overlap=foreground & generated & (raster_depth>0) & (gaussian_depth>0)
+            errors=np.abs(raster_depth[overlap].astype(np.float64)-gaussian_depth[overlap].astype(np.float64))/1000
+            depth_error_sum+=float(errors.sum());depth_error_count+=int(errors.size)
+            if errors.size:
+                depth_error_max=max(depth_error_max,float(errors.max()))
+            for entity in set(int(v) for v in np.union1d(raster_id,gaussian_id) if v):
+                r=raster_id==entity;g=gaussian_id==entity
+                intersections[entity]=intersections.get(entity,0)+int(np.count_nonzero(r&g))
+                unions[entity]=unions.get(entity,0)+int(np.count_nonzero(r|g))
+        counts=gaussian.get('entity_counts',{})
+        iou={str(entity):intersections.get(entity,0)/unions[entity] if unions.get(entity) else None for entity in sorted(set(unions)|{int(v) for v in counts})}
+        timings=gaussian.get('frame_times_s',[]);raster_timings=gaussian.get('raster_frame_times_s',[])
+        checks['gaussian_frames']=matching_shapes and all(len(list((root/directory).glob('*.png')))==frames for directory in gaussian_directories) and len(timings)==frames and len(raster_timings)==frames
+        if gaussian_required:
+            checks['gaussian_required']=True
+        checks['gaussian_geometry_record']=gaussian.get('sampling',{}).get('no_optimization') is True and {1,2}.issubset({int(v) for v in counts}) and all(int(v)>0 for v in counts.values()) and all(math.isfinite(v) and v>0 for v in timings+raster_timings)
+        stage=record.get('stages',{}).get('gaussian_render',{})
+        checks['gaussian_stage_provenance']=bool(stage) and all(stage.get('inputs',{}).get(name)==record['outputs'].get(name) and name in record['outputs'] for name in ('scene.json','heightmap.npz','obstacles.npz','fitted_car.obj','trajectory.json')) and all(stage.get('outputs',{}).get(name)==record['outputs'].get(name) for directory in ('gaussian_depth','gaussian_instance_id','gaussian_edge_mixing') for name in (f'{directory}/{frame:04d}.png' for frame in range(frames)))
+        metrics['gaussian_comparison']={'iou_by_id':iou,'depth_mae_m_on_overlap':depth_error_sum/depth_error_count if depth_error_count else None,'depth_max_error_m_on_overlap':depth_error_max if depth_error_count else None,'depth_overlap_pixels':depth_error_count,'crack_pixels':cracks,'crack_fraction_of_raster_foreground':cracks/raster_foreground if raster_foreground else None,'edge_mixing_pixels':edge_mix,'edge_mixing_fraction_of_gaussian_foreground':edge_mix/gaussian_foreground if gaussian_foreground else None,'raster_mean_frame_s':sum(raster_timings)/len(raster_timings) if raster_timings else None,'gaussian_mean_frame_s':sum(timings)/len(timings) if timings else None,'entity_gaussian_counts':counts,'depth_method':gaussian.get('depth_method'),'feature_method':gaussian.get('feature_method'),'fallback':gaussian.get('fallback')}
     return {'passed':all(value is True for value in checks.values()),'checks':checks,'metrics':metrics,'limits':{**limits,'baseline_initial_mask_iou':BASELINE_INITIAL_MASK_IOU},'integrity':integrity}
 
 

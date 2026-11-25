@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 import pybullet as p
+from car_fit import fit
 
 ROOT = Path(__file__).resolve().parents[1] / 'first_image'
 
@@ -31,7 +32,7 @@ def build(args):
     if out.exists() and any(out.iterdir()):
         raise ValueError(f'output directory is not empty: {out}')
     out.mkdir(parents=True, exist_ok=True)
-    inputs = {'image': ROOT / 'input.jpg', 'da3': ROOT / 'da3nested_output/prediction.npz', 'sam_car': ROOT / 'car_input/car_mask.png'}
+    inputs = {'image': ROOT / 'input.jpg', 'da3': ROOT / 'da3nested_output/prediction.npz', 'sam_car': ROOT / 'car_input/car_mask.png', 'hunyuan_mesh': ROOT / 'hunyuan21_output/car_shape.glb'}
     hashes = {name: digest(path) for name, path in inputs.items()}
     d = np.load(inputs['da3'])
     depth = d['depth'][0]
@@ -231,8 +232,18 @@ def build(args):
                     best=(score,width,length,box_h,center,bbox)
     if best is None:
         raise ValueError('unable to project box into original camera')
-    _,width,length,box_h,car_pos,fitted_bbox=best
-    mass = args.density * width * length * box_h
+    fitted_mesh, mesh_fit = fit(inputs['hunyuan_mesh'], car, depth, k, right, forward, normal, flat_z, (anchor_x,anchor_y), car_depth)
+    fitted_mesh.export(out/'fitted_car.obj')
+    hull = fitted_mesh.convex_hull
+    hull.export(out/'car_collision_hull.obj')
+    width,length,box_h = mesh_fit['size_m']
+    car_pos = mesh_fit['position_m']
+    yaw = mesh_fit['yaw_rad']
+    car_orientation = p.getQuaternionFromEuler([0,0,yaw])
+    mesh_volume = float(fitted_mesh.volume)
+    if not math.isfinite(mesh_volume) or mesh_volume <= 0:
+        raise ValueError('Hunyuan vehicle mesh has invalid enclosed volume')
+    mass = args.density * mesh_volume
     obstacle_meshes=[]
     for component in components:
         mesh_vertices=[]; mesh_indices=[]
@@ -244,7 +255,7 @@ def build(args):
             mesh_vertices.extend([[x+dx*half,y+dy*half,z] for z in (bottom,top) for dy in (-1,1) for dx in (-1,1)])
             mesh_indices.extend(q+t for t in (0,2,1,1,2,3,4,5,6,5,7,6,0,1,4,1,5,4,2,6,3,3,6,7,0,4,2,2,4,6,1,3,5,3,7,5))
         obstacle_meshes.append((mesh_vertices,mesh_indices))
-    scene = {'camera': {'intrinsics': k.tolist(), 'position_m': [0,0,0], 'forward': camera_forward, 'up': camera_up, 'fixed': True}, 'ground': {'plane_z_ax_by_c': [a,b,c], 'flat_world_z_m': flat_z, 'height_m': height, 'pitch_deg': pitch, 'rms_m': residual, 'sample_count': int(road.sum()), 'cell_m': args.cell, 'grid_size': n, 'heightmap_method': {'near': 'metric DA3 road pixel back-projection, cell mean', 'far': 'camera ray / fitted plane intersection', 'car': 'SAM mask footprint replaced by fitted plane', 'near_depth_m': args.near_depth, 'ground_inlier_m': args.ground_inlier, 'provenance_codes': {'near_depth':1,'ray_plane':2,'car_plane_fill':3}, 'cell_counts': {'near_depth':int(np.count_nonzero(provenance==1)), 'ray_plane':int(np.count_nonzero(provenance==2)), 'car_plane_fill':int(np.count_nonzero(provenance==3))}}}, 'sector': {'radius_m': args.radius, 'angle_deg': args.angle, 'invisible_wall': True}, 'car': {'image_bbox_xyxy': [x0,y0,x1,y1], 'excluded_image_pixels': int(car.sum()), 'footprint_filled_with_plane': True, 'ground_contact_ray': {'pixel_uv': [u_contact,y1], 'plane_intersection_depth_m': car_depth, 'world_xy_m': [anchor_x,anchor_y]}, 'box_fit': {'method': 'ground-edge anchor and projected bounding-box search', 'reference_bbox_xyxy': target, 'predicted_bbox_xyxy': fitted_bbox, 'predicted_bbox_iou': best[0], 'width_from_bbox_at_ground_depth_m': projected_width, 'height_from_bbox_at_ground_depth_m': projected_height}, 'depth_m': car_depth, 'size_m': [width,length,box_h], 'volume_m3': width*length*box_h, 'density_kg_m3': args.density, 'mass_kg': mass, 'initial_position_m': car_pos}, 'mesh': {'vertices': len(vertices), 'triangles': len(indices)//3}}
+    scene = {'camera': {'intrinsics': k.tolist(), 'position_m': [0,0,0], 'forward': camera_forward, 'up': camera_up, 'fixed': True}, 'ground': {'plane_z_ax_by_c': [a,b,c], 'flat_world_z_m': flat_z, 'height_m': height, 'pitch_deg': pitch, 'rms_m': residual, 'sample_count': int(road.sum()), 'cell_m': args.cell, 'grid_size': n, 'heightmap_method': {'near': 'metric DA3 road pixel back-projection, cell mean', 'far': 'camera ray / fitted plane intersection', 'car': 'SAM mask footprint replaced by fitted plane', 'near_depth_m': args.near_depth, 'ground_inlier_m': args.ground_inlier, 'provenance_codes': {'near_depth':1,'ray_plane':2,'car_plane_fill':3}, 'cell_counts': {'near_depth':int(np.count_nonzero(provenance==1)), 'ray_plane':int(np.count_nonzero(provenance==2)), 'car_plane_fill':int(np.count_nonzero(provenance==3))}}}, 'sector': {'radius_m': args.radius, 'angle_deg': args.angle, 'invisible_wall': True}, 'car': {'image_bbox_xyxy': [x0,y0,x1,y1], 'excluded_image_pixels': int(car.sum()), 'footprint_filled_with_plane': True, 'ground_contact_ray': {'pixel_uv': [u_contact,y1], 'plane_intersection_depth_m': car_depth, 'world_xy_m': [anchor_x,anchor_y]}, 'mesh_fit': mesh_fit, 'initial_orientation_xyzw': car_orientation, 'collision_shape': 'convex hull of fitted Hunyuan mesh', 'box_fit': {'method': 'ground-edge anchor and projected bounding-box search', 'reference_bbox_xyxy': target, 'predicted_bbox_xyxy': best[5], 'predicted_bbox_iou': best[0], 'width_from_bbox_at_ground_depth_m': projected_width, 'height_from_bbox_at_ground_depth_m': projected_height}, 'depth_m': car_depth, 'size_m': [width,length,box_h], 'volume_m3': mesh_volume, 'density_kg_m3': args.density, 'mass_kg': mass, 'initial_position_m': car_pos}, 'mesh': {'vertices': len(vertices), 'triangles': len(indices)//3}}
     scene['obstacles']={'components':components,'component_count':len(components),'detection':{'height_above_plane_m':args.obstacle_height,'min_pixels_per_cell':args.obstacle_min_pixels,'min_cells_per_component':args.obstacle_min_cells,'connectivity':4,'source':'DA3 metric depth outside car mask, including non-road pixels'},'render_only':args.obstacles_render_only,'road_cells':road_count,'road_false_positive_cells':road_false,'road_false_positive_ratio':false_ratio,'car_footprint_obstacle_cells':int(np.count_nonzero(car_grid & (component_ids>0))),'instance_id_file':'obstacles.npz'}
     write_json(out/'scene.json', scene)
     scene_time = time.perf_counter()-grid_start
@@ -279,12 +290,13 @@ def build(args):
                 mid = [(u[0]+v[0])/2,(u[1]+v[1])/2,flat_z+.5]
                 shape = p.createCollisionShape(p.GEOM_BOX,halfExtents=[math.hypot(dx,dy)/2,.04,.5])
                 walls.append(p.createMultiBody(0,shape,basePosition=mid,baseOrientation=p.getQuaternionFromEuler([0,0,math.atan2(dy,dx)])))
-            shape = p.createCollisionShape(p.GEOM_BOX, halfExtents=[width/2,length/2,box_h/2])
-            visual = p.createVisualShape(p.GEOM_BOX, halfExtents=[width/2,length/2,box_h/2],rgbaColor=[1,0,0,1])
-            body = p.createMultiBody(mass,shape,visual,basePosition=car_pos)
+            shape = p.createCollisionShape(p.GEOM_MESH, vertices=hull.vertices.tolist())
+            visual = p.createVisualShape(p.GEOM_MESH, vertices=fitted_mesh.vertices.tolist(), indices=fitted_mesh.faces.ravel().tolist(), rgbaColor=[1,0,0,1])
+            body = p.createMultiBody(mass,shape,visual,basePosition=car_pos,baseOrientation=car_orientation)
             p.changeDynamics(body,-1,lateralFriction=args.friction,restitution=0,linearDamping=0,angularDamping=0)
             return ground, body, obstacle_bodies
         ground, body, obstacle_bodies = create_world()
+        inertia_diagonal=list(p.getDynamicsInfo(body,-1)[2])
         shape_counts={instance_id:len(p.getCollisionShapeData(obstacle_body,-1)) for obstacle_body,instance_id in obstacle_bodies.items()}
         for component in components:
             component['collision_shape_count']=shape_counts[component['instance_id']]
@@ -297,11 +309,9 @@ def build(args):
             distance=math.hypot(x-car_pos[0],y-car_pos[1])
             if distance>max(width,length) and tops[cy,cx]>car_pos[2]:
                 targets.append((distance,x,y,int(component_ids[cy,cx])))
-        if not targets and not args.obstacles_render_only:
-            raise RuntimeError('no solid obstacle reachable from the car')
-        target=min(targets) if targets else None
-        if target:
-            distance,x,y,target_id=target
+        obstacle_target=min(targets) if targets else None
+        if obstacle_target:
+            distance,x,y,target_id=obstacle_target
             direction=np.array([x-car_pos[0],y-car_pos[1],0.])/distance
             obstacle_speed=min(15.,max(args.speed,math.sqrt(2*args.friction*9.81*distance)*1.4))
         else:
@@ -313,7 +323,7 @@ def build(args):
             vel,omega=p.getBaseVelocity(body)
             rows=[[ *pos,*quat,*vel,*omega ]]
             penetration=0.0
-            obstacle_contacts=0
+            obstacle_contacts={}
             p.resetBaseVelocity(body,linearVelocity=velocity)
             for step in range(int(args.seconds*240)-1):
                 p.stepSimulation()
@@ -322,7 +332,10 @@ def build(args):
                 rows.append([*pos,*quat,*vel,*omega])
                 contacts=p.getContactPoints(bodyA=body)
                 penetration=max(penetration,max([0]+[-float(q[8]) for q in contacts]))
-                obstacle_contacts+=sum(q[2] in obstacle_bodies for q in contacts)
+                for q in contacts:
+                    if q[2] in obstacle_bodies:
+                        instance_id=obstacle_bodies[q[2]]
+                        obstacle_contacts[instance_id]=obstacle_contacts.get(instance_id,0)+1
             return rows,penetration,obstacle_contacts
         trajectories={};penetrations={};replays={};hits={}
         for name,velocity in impulses.items():
@@ -400,14 +413,24 @@ def build(args):
         render_time=time.perf_counter()-render_start
     finally:
         p.disconnect(client)
-    ballistic_visible=all((bbox is not None and bbox[0]>=0 and bbox[1]>=0 and bbox[2]<w and bbox[3]<h) for row in trajectories['ballistic'] for bbox in [projected_box_bbox(row[:3],width,length,box_h)])
+    def in_camera(row):
+        rotation=np.asarray(p.getMatrixFromQuaternion(row[3:7])).reshape(3,3)
+        for dx in (-width/2,width/2):
+            for dy in (-length/2,length/2):
+                for dz in (-box_h/2,box_h/2):
+                    point=np.asarray(row[:3])+rotation@np.asarray([dx,dy,dz])
+                    px,py,pz=point[0]*right+point[1]*forward+point[2]*normal
+                    if py<=0 or not (0<=k[0,0]*px/py+k[0,2]<w and 0<=-k[1,1]*pz/py+k[1,2]<h):
+                        return False
+        return True
+    ballistic_visible=all(in_camera(row) for row in trajectories['ballistic'])
     outputs={str(path.relative_to(out)):digest(path) for path in sorted(out.rglob('*')) if path.is_file()}
-    record={'schema':1,'inputs':{name:{'path':str(path.resolve()),'sha256':hashes[name]} for name,path in inputs.items()},'outputs':outputs,'parameters':{'radius_m':args.radius,'angle_deg':args.angle,'cell_m':args.cell,'friction':args.friction,'density_kg_m3':args.density,'derived_mass_kg':mass,'near_depth_m':args.near_depth,'ground_inlier_m':args.ground_inlier,'obstacle_height_m':args.obstacle_height,'obstacle_min_pixels':args.obstacle_min_pixels,'obstacle_min_cells':args.obstacle_min_cells,'obstacles_render_only':args.obstacles_render_only,'speed_m_s':args.speed,'seconds':args.seconds,'physics_hz':240,'video_fps':30},'timings_s':{'ground_fit':ground_time,'scene_build':scene_time,'simulation_and_replay':sim_time,'render_and_video':render_time,'total':time.perf_counter()-start},'versions':{'python':platform.python_version(),'numpy':version('numpy'),'pillow':version('pillow'),'pybullet':version('pybullet'),'pybullet_api':p.getAPIVersion(),'ffmpeg':subprocess.check_output(['ffmpeg','-version'],text=True).splitlines()[0]},'measurements':{'max_contact_penetration_m':penetration,'replay_trajectory_identical':replay_identical,'final_position_m':rows[-1][:3],'final_velocity_m_s':rows[-1][7:10],'initial_projection_bbox_xyxy':actual_bbox,'initial_projection_mask_iou':projection_evidence['mask_iou'],'road_false_positive_ratio':false_ratio,'road_false_positive_cells':road_false,'road_cells':road_count,'obstacle_component_sizes_cells':[component['cells'] for component in components],'obstacle_component_count':len(components)}}
+    record={'schema':1,'inputs':{name:{'path':str(path.resolve()),'sha256':hashes[name]} for name,path in inputs.items()},'outputs':outputs,'parameters':{'radius_m':args.radius,'angle_deg':args.angle,'cell_m':args.cell,'friction':args.friction,'density_kg_m3':args.density,'derived_mass_kg':mass,'near_depth_m':args.near_depth,'ground_inlier_m':args.ground_inlier,'speed_m_s':args.speed,'seconds':args.seconds,'physics_hz':240,'obstacle_height_m':args.obstacle_height,'obstacle_min_pixels':args.obstacle_min_pixels,'obstacle_min_cells':args.obstacle_min_cells,'obstacles_render_only':args.obstacles_render_only,'video_fps':30},'timings_s':{'ground_fit':ground_time,'scene_build':scene_time,'simulation_and_replay':sim_time,'render_and_video':render_time,'total':time.perf_counter()-start},'versions':{'python':platform.python_version(),'numpy':version('numpy'),'pillow':version('pillow'),'pybullet':version('pybullet'),'pybullet_api':p.getAPIVersion(),'ffmpeg':subprocess.check_output(['ffmpeg','-version'],text=True).splitlines()[0]},'measurements':{'max_contact_penetration_m':penetration,'replay_trajectory_identical':replay_identical,'final_position_m':rows[-1][:3],'final_velocity_m_s':rows[-1][7:10],'initial_projection_bbox_xyxy':actual_bbox,'initial_projection_mask_iou':projection_evidence['mask_iou'],'mesh_fit':mesh_fit,'road_false_positive_ratio':false_ratio,'road_false_positive_cells':road_false,'road_cells':road_count,'obstacle_component_sizes_cells':[component['cells'] for component in components],'obstacle_component_count':len(components)}}
     record['stages'] = {
-        'ground_fit_scene': {'inputs': hashes, 'outputs': {name:outputs[name] for name in ('scene.json','heightmap.npz','obstacles.npz')}, 'parameters': {'radius_m':args.radius,'angle_deg':args.angle,'cell_m':args.cell,'near_depth_m':args.near_depth,'ground_inlier_m':args.ground_inlier,'obstacle_height_m':args.obstacle_height,'obstacle_min_pixels':args.obstacle_min_pixels,'obstacle_min_cells':args.obstacle_min_cells,'obstacles_render_only':args.obstacles_render_only}, 'seconds':ground_time+scene_time},
-        'simulation_replay': {'inputs': {'scene.json':outputs['scene.json'],'heightmap.npz':outputs['heightmap.npz'],'obstacles.npz':outputs['obstacles.npz']}, 'outputs': {name:outputs[name] for name in ('trajectory.json','replay_trajectory.json')}, 'parameters': {'density_kg_m3':args.density,'derived_mass_kg':mass,'friction':args.friction,'speed_m_s':args.speed,'physics_hz':240,'obstacles_render_only':args.obstacles_render_only}, 'seconds':sim_time},
-        'proxy_render_video': {'inputs': {'scene.json':outputs['scene.json'],'heightmap.npz':outputs['heightmap.npz'],'obstacles.npz':outputs['obstacles.npz'],'trajectory.json':outputs['trajectory.json']}, 'outputs': {name:hashval for name,hashval in outputs.items() if name.startswith(('depth/','instance_id/')) or name in ('depth.mp4','instance_id.mp4','initial_projection.json')}, 'parameters': {'fps':30,'width':w,'height':h,'camera':'original fixed DA3'}, 'seconds':render_time}}
-    record['impulse_cases']={name:{'trajectory':('' if name=='coast' else name+'/')+'trajectory.json','replay':('' if name=='coast' else name+'/')+'replay_trajectory.json','impulse':specifications[name],'max_contact_penetration_m':penetrations[name],'obstacle_contact_samples':hits[name]} for name in impulses}
+        'ground_fit_scene': {'inputs': hashes, 'outputs': {name:outputs[name] for name in ('scene.json','heightmap.npz','fitted_car.obj','car_collision_hull.obj','obstacles.npz')}, 'parameters': {'radius_m':args.radius,'angle_deg':args.angle,'cell_m':args.cell,'near_depth_m':args.near_depth,'ground_inlier_m':args.ground_inlier,'obstacle_height_m':args.obstacle_height,'obstacle_min_pixels':args.obstacle_min_pixels,'obstacle_min_cells':args.obstacle_min_cells,'obstacles_render_only':args.obstacles_render_only}, 'seconds':ground_time+scene_time},
+        'simulation_replay': {'inputs': {'scene.json':outputs['scene.json'],'heightmap.npz':outputs['heightmap.npz'],'fitted_car.obj':outputs['fitted_car.obj'],'car_collision_hull.obj':outputs['car_collision_hull.obj'],'obstacles.npz':outputs['obstacles.npz']}, 'outputs': {name:outputs[name] for name in ('trajectory.json','replay_trajectory.json')}, 'parameters': {'density_kg_m3':args.density,'derived_mass_kg':mass,'friction':args.friction,'speed_m_s':args.speed,'physics_hz':240,'obstacles_render_only':args.obstacles_render_only}, 'seconds':sim_time},
+        'proxy_render_video': {'inputs': {'scene.json':outputs['scene.json'],'heightmap.npz':outputs['heightmap.npz'],'trajectory.json':outputs['trajectory.json'],'obstacles.npz':outputs['obstacles.npz'],'fitted_car.obj':outputs['fitted_car.obj']}, 'outputs': {name:hashval for name,hashval in outputs.items() if name.startswith(('depth/','instance_id/')) or name in ('depth.mp4','instance_id.mp4','initial_projection.json')}, 'parameters': {'fps':30,'width':w,'height':h,'camera':'original fixed DA3'}, 'seconds':render_time}}
+    record['impulse_cases']={name:{'trajectory':('' if name=='coast' else name+'/')+'trajectory.json','replay':('' if name=='coast' else name+'/')+'replay_trajectory.json','impulse':specifications[name],'inertia_diagonal_kg_m2':inertia_diagonal,'max_contact_penetration_m':penetrations[name],'obstacle_contact_samples_by_id':hits[name]} for name in impulses}
     record['parameters']['ballistic_up_speed_m_s']=args.ballistic_up_speed
     record['measurements']['ballistic_in_camera']=ballistic_visible
     record['stages']['simulation_replay']['outputs'].update({name:outputs[name] for name in outputs if name.startswith(('ballistic/','obstacle/')) or name=='impulses.json'})

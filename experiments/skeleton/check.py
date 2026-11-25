@@ -69,6 +69,19 @@ def check(root):
             'initial_projection_improved': projection_iou > BASELINE_INITIAL_MASK_IOU,
             'initial_projection_record': projection['frame']=='instance_id/0000.png' and bbox(reference)==projection['reference_bbox_xyxy'] and bbox(rendered)==projection['rendered_bbox_xyxy']==m['initial_projection_bbox_xyxy'] and len(reference&rendered)==projection['intersection_pixels'] and union==projection['union_pixels'] and abs(projection_iou-projection['mask_iou'])<1e-12 and abs(projection_iou-m['initial_projection_mask_iou'])<1e-12,
             'frame_count':len(list((root/'depth').glob('*.png')))==int(params['seconds']*params['video_fps']) and len(list((root/'instance_id').glob('*.png')))==int(params['seconds']*params['video_fps'])}
+    if 'hunyuan_mesh' in record['inputs']:
+        fit=box['mesh_fit']
+        size=fit['size_m']
+        checks['mesh_record']=all(name in record['outputs'] for name in ('fitted_car.obj','car_collision_hull.obj')) and fit==m['mesh_fit'] and all(math.isfinite(v) and v>0 for v in size) and math.isfinite(fit['scale']) and fit['scale']>0 and box['collision_shape']=='convex hull of fitted Hunyuan mesh'
+        checks['mesh_ground_contact']=abs(fit['position_m'][2]-size[2]/2-surface)<.01
+        checks['size_reasonableness_record']=fit['size_check']['reasonable']==all(.7<=v<=1.3 for v in fit['size_check']['fit_to_reference_ratio'])
+        from PIL import Image
+        image=Image.open(root/'instance_id/0000.png')
+        checks['rendered_silhouette_record']={(y,x) for y in range(image.height) for x in range(image.width) if image.getpixel((x,y))==2}==rendered
+        metrics['mesh_size_m']=size
+        metrics['mesh_fit_scale']=fit['scale']
+        metrics['mesh_fit_yaw_rad']=fit['yaw_rad']
+        metrics['mesh_size_reasonable']=fit['size_check']['reasonable']
     return {'passed':all(value is True for value in checks.values()),'checks':checks,'metrics':metrics,'limits':{**limits,'baseline_initial_mask_iou':BASELINE_INITIAL_MASK_IOU},'integrity':integrity}
 
 

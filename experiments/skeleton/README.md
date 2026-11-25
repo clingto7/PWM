@@ -30,7 +30,7 @@ limits were backfilled as measured prototype gates:
 
 | Quantity | First measurement | Gate | Basis |
 | --- | ---: | ---: | --- |
-| Final angular speed | 0 rad/s, all cases | 0.001 rad/s | Same small terminal scale as the existing 0.001 m/s linear gate, in angular units. |
+| Final angular speed | 0 rad/s, all cases | 0.001 rad/s | Allows small numerical residue while requiring near-zero rotation; checked separately from linear speed. |
 | Coast distance error | −0.0102186 m | 0.02 m | About 1 cm margin over the measured absolute error. |
 | Ballistic flight time error | −0.0119139 s | 0.02 s | About two 1/240 s physics steps beyond the measured error. |
 | Ballistic range error | −0.0357416 m | 0.05 m | About 1.4 cm margin over the measured absolute error. |

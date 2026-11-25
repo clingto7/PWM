@@ -95,7 +95,9 @@ class CheckCliTest(unittest.TestCase):
             for name in ('instance_id/0000.png','instance_id/0001.png','depth/0001.png'):
                 rec['outputs'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
             (root/'run.json').write_text(json.dumps(rec))
-            report=json.loads(self.invoke(root).stdout)
+            result=self.invoke(root)
+            self.assertTrue(result.stdout,result.stderr)
+            report=json.loads(result.stdout)
             self.assertTrue(report['checks']['obstacle_render_ids'])
             self.assertEqual(report['metrics']['missing_obstacle_render_ids'],[])
             Image.fromarray(np.array([[1,2,0]],dtype=np.uint16)).save(root/'instance_id/0001.png')
@@ -246,7 +248,9 @@ class CheckCliTest(unittest.TestCase):
             (root/'impulses.json').write_text(json.dumps(specs))
             rec['outputs']['impulses.json']=hashlib.sha256((root/'impulses.json').read_bytes()).hexdigest()
             (root/'run.json').write_text(json.dumps(rec))
-            report=json.loads(self.invoke(root).stdout)
+            result=self.invoke(root)
+            self.assertTrue(result.stdout,result.stderr)
+            report=json.loads(result.stdout)
             cases=report['metrics']['impulse_cases']
             self.assertAlmostEqual(cases['coast']['metrics']['expected_distance_m'],1/9.81)
             self.assertAlmostEqual(cases['ballistic']['metrics']['expected_flight_time_s'],2/9.81)

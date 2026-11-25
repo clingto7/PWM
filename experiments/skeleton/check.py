@@ -174,7 +174,7 @@ def check(root):
             case_checks={'impulse_record':case['impulse']==impulse and impulse['application_point']=='center_of_mass' and impulse['application_point_world_m']==box['initial_position_m'] and math.isclose(impulse['magnitude_n_s'],params['derived_mass_kg']*speed,rel_tol=1e-9) and all(math.isclose(a,b/speed,abs_tol=1e-9) for a,b in zip(impulse['direction'],delta)),
                          'initial_stationary':rows[0][:3]==box['initial_position_m'] and all(abs(v)<1e-12 for v in rows[0][7:13]),
                          'penetration':penetration<=limits['penetration_m'],
-                         'final_rest':end_linear_speed<=limits['final_speed_m_s'] and abs(last[2]-box['size_m'][2]/2-surface)<=limits['resting_height_error_m'],
+                         'final_rest':end_linear_speed<=limits['final_speed_m_s'] and abs(last[2]-box['size_m'][2]/2-ground['flat_world_z_m'])<=limits['resting_height_error_m'],
                          'final_angular_rest':gate(end_angular_speed,limits['final_angular_speed_rad_s']),
                          'inertia_record':inertia is not None and len(inertia)==3 and all(v>0 for v in inertia),
                          'no_energy_gain':gain<=limits['energy_gain_j_kg'] and inertia is not None,
@@ -230,7 +230,7 @@ def check(root):
                     case_metrics['impact_applicability']='render-only or no detected solid obstacle'
                     if not params['obstacles_render_only'] and params['obstacle_height_m']==.35 and params['obstacle_min_cells']==2:
                         case_checks['solid_target']=False
-            cases[name]={'checks':case_checks,'metrics':case_metrics,'passed':all(value is True or value=='不适用' for value in case_checks.values())}
+            cases[name]={'checks':case_checks,'metrics':case_metrics,'passed':all(value is True or (isinstance(value,str) and value=='不适用') for value in case_checks.values())}
         checks['impulse_cases']=all(case['passed'] for case in cases.values())
         metrics['impulse_cases']=cases
     return {'passed':all(value is True for value in checks.values()),'checks':checks,'metrics':metrics,'limits':{**limits,'baseline_initial_mask_iou':BASELINE_INITIAL_MASK_IOU},'integrity':integrity}

@@ -123,16 +123,61 @@ def build(args):
         raise ValueError('empty SAM car mask')
     x0, x1 = int(xs_car.min()), int(xs_car.max())
     y0, y1 = int(ys_car.min()), int(ys_car.max())
-    car_depth = float(np.median(depth[car & np.isfinite(depth)]))
-    car_cam_x = ((x0+x1)/2-k[0,2])/k[0,0]*car_depth
-    cx,cy,_ = world(np.array([car_cam_x,car_depth,a*car_cam_x+b*car_depth+c]))
-    width = max(.2, (x1-x0)/k[0,0]*car_depth)
-    length = max(.2, (y1-y0)/k[1,1]*car_depth)
-    box_h = min(width, length) * .5
+    # The mask's lowest road-contact pixels supply a ground ray. Intersect
+    # that ray with the fitted camera-space plane instead of using car-body
+    # depth, which belongs to surfaces above the road.
+    lower = xs_car[ys_car >= y1-2]
+    u_contact = float(np.median(lower))
+    ray_x = (u_contact-k[0,2])/k[0,0]
+    ray_z = -(y1-k[1,2])/k[1,1]
+    denominator = ray_z-a*ray_x-b
+    if abs(denominator) < 1e-6:
+        raise ValueError('car contact ray is parallel to fitted ground')
+    car_depth = c/denominator
+    if not 0 < car_depth <= args.radius:
+        raise ValueError('car ground contact lies outside reconstruction sector')
+    anchor_x,anchor_y,_ = world(np.array([ray_x*car_depth,car_depth,ray_z*car_depth]))
+    projected_width = (x1-x0+1)/k[0,0]*car_depth
+    projected_height = (y1-y0+1)/k[1,1]*car_depth
+    def projected_box_bbox(center,width,length,box_h):
+        projected=[]
+        for dx in (-width/2,width/2):
+            for dy in (-length/2,length/2):
+                for dz in (-box_h/2,box_h/2):
+                    wx,wy,wz=center[0]+dx,center[1]+dy,center[2]+dz
+                    px,py,pz=wx*right+wy*forward+wz*normal
+                    if py <= 0:
+                        return None
+                    projected.append((k[0,0]*px/py+k[0,2],-k[1,1]*pz/py+k[1,2]))
+        return [min(p[0] for p in projected),min(p[1] for p in projected),max(p[0] for p in projected),max(p[1] for p in projected)]
+    target=[x0,y0,x1+1,y1+1]
+    def bbox_iou(candidate):
+        ix=max(0,min(candidate[2],target[2])-max(candidate[0],target[0]))
+        iy=max(0,min(candidate[3],target[3])-max(candidate[1],target[1]))
+        intersection=ix*iy
+        area=(candidate[2]-candidate[0])*(candidate[3]-candidate[1])
+        target_area=(target[2]-target[0])*(target[3]-target[1])
+        return intersection/(area+target_area-intersection)
+    best=None
+    for width_scale in (.7,.85,1.,1.15):
+        for length_scale in (.5,.75,1.,1.25,1.5,2.):
+            for height_scale in (.6,.8,1.,1.2,1.4):
+                width=projected_width*width_scale
+                length=projected_width*length_scale
+                box_h=projected_height*height_scale
+                # The near face touches the mask's lower-edge ground ray.
+                center=[anchor_x,anchor_y+length/2,flat_z+box_h/2]
+                bbox=projected_box_bbox(center,width,length,box_h)
+                if bbox is None:
+                    continue
+                score=bbox_iou(bbox)
+                if best is None or score>best[0]:
+                    best=(score,width,length,box_h,center,bbox)
+    if best is None:
+        raise ValueError('unable to project box into original camera')
+    _,width,length,box_h,car_pos,fitted_bbox=best
     mass = args.density * width * length * box_h
-    base_z = flat_z
-    car_pos = [cx, cy, base_z+box_h/2]
-    scene = {'camera': {'intrinsics': k.tolist(), 'position_m': [0,0,0], 'forward': camera_forward, 'up': camera_up, 'fixed': True}, 'ground': {'plane_z_ax_by_c': [a,b,c], 'flat_world_z_m': flat_z, 'height_m': height, 'pitch_deg': pitch, 'rms_m': residual, 'sample_count': int(road.sum()), 'cell_m': args.cell, 'grid_size': n, 'heightmap_method': {'near': 'metric DA3 road pixel back-projection, cell mean', 'far': 'camera ray / fitted plane intersection', 'car': 'SAM mask footprint replaced by fitted plane', 'near_depth_m': args.near_depth, 'ground_inlier_m': args.ground_inlier, 'provenance_codes': {'near_depth':1,'ray_plane':2,'car_plane_fill':3}, 'cell_counts': {'near_depth':int(np.count_nonzero(provenance==1)), 'ray_plane':int(np.count_nonzero(provenance==2)), 'car_plane_fill':int(np.count_nonzero(provenance==3))}}}, 'sector': {'radius_m': args.radius, 'angle_deg': args.angle, 'invisible_wall': True}, 'car': {'image_bbox_xyxy': [x0,y0,x1,y1], 'excluded_image_pixels': int(car.sum()), 'footprint_filled_with_plane': True, 'depth_m': car_depth, 'size_m': [width,length,box_h], 'volume_m3': width*length*box_h, 'density_kg_m3': args.density, 'mass_kg': mass, 'initial_position_m': car_pos}, 'mesh': {'vertices': len(vertices), 'triangles': len(indices)//3}}
+    scene = {'camera': {'intrinsics': k.tolist(), 'position_m': [0,0,0], 'forward': camera_forward, 'up': camera_up, 'fixed': True}, 'ground': {'plane_z_ax_by_c': [a,b,c], 'flat_world_z_m': flat_z, 'height_m': height, 'pitch_deg': pitch, 'rms_m': residual, 'sample_count': int(road.sum()), 'cell_m': args.cell, 'grid_size': n, 'heightmap_method': {'near': 'metric DA3 road pixel back-projection, cell mean', 'far': 'camera ray / fitted plane intersection', 'car': 'SAM mask footprint replaced by fitted plane', 'near_depth_m': args.near_depth, 'ground_inlier_m': args.ground_inlier, 'provenance_codes': {'near_depth':1,'ray_plane':2,'car_plane_fill':3}, 'cell_counts': {'near_depth':int(np.count_nonzero(provenance==1)), 'ray_plane':int(np.count_nonzero(provenance==2)), 'car_plane_fill':int(np.count_nonzero(provenance==3))}}}, 'sector': {'radius_m': args.radius, 'angle_deg': args.angle, 'invisible_wall': True}, 'car': {'image_bbox_xyxy': [x0,y0,x1,y1], 'excluded_image_pixels': int(car.sum()), 'footprint_filled_with_plane': True, 'ground_contact_ray': {'pixel_uv': [u_contact,y1], 'plane_intersection_depth_m': car_depth, 'world_xy_m': [anchor_x,anchor_y]}, 'box_fit': {'method': 'ground-edge anchor and projected bounding-box search', 'reference_bbox_xyxy': target, 'predicted_bbox_xyxy': fitted_bbox, 'predicted_bbox_iou': best[0], 'width_from_bbox_at_ground_depth_m': projected_width, 'height_from_bbox_at_ground_depth_m': projected_height}, 'depth_m': car_depth, 'size_m': [width,length,box_h], 'volume_m3': width*length*box_h, 'density_kg_m3': args.density, 'mass_kg': mass, 'initial_position_m': car_pos}, 'mesh': {'vertices': len(vertices), 'triangles': len(indices)//3}}
     write_json(out/'scene.json', scene)
     scene_time = time.perf_counter()-grid_start
     sim_start = time.perf_counter()
@@ -162,13 +207,15 @@ def build(args):
             visual = p.createVisualShape(p.GEOM_BOX, halfExtents=[width/2,length/2,box_h/2],rgbaColor=[1,0,0,1])
             body = p.createMultiBody(mass,shape,visual,basePosition=car_pos)
             p.changeDynamics(body,-1,lateralFriction=args.friction,restitution=0,linearDamping=0,angularDamping=0)
-            p.resetBaseVelocity(body,linearVelocity=[0,args.speed,0])
             return ground, body
         ground, body = create_world()
         def trajectory():
-            rows=[]
+            pos,quat=p.getBasePositionAndOrientation(body)
+            vel,omega=p.getBaseVelocity(body)
+            rows=[[ *pos,*quat,*vel,*omega ]]
             penetration=0.0
-            for step in range(int(args.seconds*240)):
+            p.resetBaseVelocity(body,linearVelocity=[0,args.speed,0])
+            for step in range(int(args.seconds*240)-1):
                 p.stepSimulation()
                 pos,quat=p.getBasePositionAndOrientation(body)
                 vel,omega=p.getBaseVelocity(body)
@@ -207,10 +254,13 @@ def build(args):
                 ids[(raw & 0xffffff) == ground]=1
                 ids[(raw & 0xffffff) == body]=2
                 ids[raw<0]=0
-                millimeters=np.clip(metric*1000,0,65535).astype(np.uint16)
+                # Zero is invalid/no entity; foreground retains metric mm.
+                millimeters=np.where(ids>0,np.clip(metric*1000,1,65535),0).astype(np.uint16)
                 Image.fromarray(millimeters).save(depth_dir/f'{frame:04d}.png')
                 Image.fromarray(ids).save(ids_dir/f'{frame:04d}.png')
-                enc_depth.stdin.write(np.clip(metric/args.radius*255,0,255).astype(np.uint8).tobytes())
+                if frame == 0:
+                    first_ids=ids.copy()
+                enc_depth.stdin.write(np.where(ids>0,np.clip(metric/args.radius*255,0,255),0).astype(np.uint8).tobytes())
                 enc_id.stdin.write((ids*110).tobytes())
         finally:
             enc_depth.stdin.close();enc_id.stdin.close()
@@ -218,15 +268,33 @@ def build(args):
             id_status = enc_id.wait()
             if depth_status != 0 or id_status != 0:
                 raise RuntimeError('ffmpeg failed')
+        # Store pixel runs from the actual first ID render and resized SAM mask.
+        def runs(mask):
+            result=[]
+            for row in range(h):
+                active=np.flatnonzero(mask[row])
+                if active.size:
+                    cuts=np.where(np.diff(active)>1)[0]
+                    starts=np.r_[0,cuts+1]; ends=np.r_[cuts,active.size-1]
+                    result.extend([row,int(active[i]),int(active[j])+1] for i,j in zip(starts,ends))
+            return result
+        reference_runs=runs(car)
+        rendered_runs=runs(first_ids==2)
+        overlap=int(np.count_nonzero(car & (first_ids==2)))
+        union=int(np.count_nonzero(car | (first_ids==2)))
+        py,px=np.nonzero(first_ids==2)
+        actual_bbox=[int(px.min()),int(py.min()),int(px.max())+1,int(py.max())+1] if len(px) else None
+        projection_evidence={'reference_runs_y_x0_x1':reference_runs,'rendered_runs_y_x0_x1':rendered_runs,'reference_bbox_xyxy':target,'rendered_bbox_xyxy':actual_bbox,'intersection_pixels':overlap,'union_pixels':union,'mask_iou':overlap/union if union else 0,'frame':'instance_id/0000.png'}
+        write_json(out/'initial_projection.json',projection_evidence)
         render_time=time.perf_counter()-render_start
     finally:
         p.disconnect(client)
     outputs={str(path.relative_to(out)):digest(path) for path in sorted(out.rglob('*')) if path.is_file()}
-    record={'schema':1,'inputs':{name:{'path':str(path.resolve()),'sha256':hashes[name]} for name,path in inputs.items()},'outputs':outputs,'parameters':{'radius_m':args.radius,'angle_deg':args.angle,'cell_m':args.cell,'friction':args.friction,'density_kg_m3':args.density,'derived_mass_kg':mass,'near_depth_m':args.near_depth,'ground_inlier_m':args.ground_inlier,'speed_m_s':args.speed,'seconds':args.seconds,'physics_hz':240,'video_fps':30},'timings_s':{'ground_fit':ground_time,'scene_build':scene_time,'simulation_and_replay':sim_time,'render_and_video':render_time,'total':time.perf_counter()-start},'versions':{'python':platform.python_version(),'numpy':version('numpy'),'pillow':version('pillow'),'pybullet':version('pybullet'),'pybullet_api':p.getAPIVersion(),'ffmpeg':subprocess.check_output(['ffmpeg','-version'],text=True).splitlines()[0]},'measurements':{'max_contact_penetration_m':penetration,'replay_trajectory_identical':replay_identical,'final_position_m':rows[-1][:3],'final_velocity_m_s':rows[-1][7:10]}}
+    record={'schema':1,'inputs':{name:{'path':str(path.resolve()),'sha256':hashes[name]} for name,path in inputs.items()},'outputs':outputs,'parameters':{'radius_m':args.radius,'angle_deg':args.angle,'cell_m':args.cell,'friction':args.friction,'density_kg_m3':args.density,'derived_mass_kg':mass,'near_depth_m':args.near_depth,'ground_inlier_m':args.ground_inlier,'speed_m_s':args.speed,'seconds':args.seconds,'physics_hz':240,'video_fps':30},'timings_s':{'ground_fit':ground_time,'scene_build':scene_time,'simulation_and_replay':sim_time,'render_and_video':render_time,'total':time.perf_counter()-start},'versions':{'python':platform.python_version(),'numpy':version('numpy'),'pillow':version('pillow'),'pybullet':version('pybullet'),'pybullet_api':p.getAPIVersion(),'ffmpeg':subprocess.check_output(['ffmpeg','-version'],text=True).splitlines()[0]},'measurements':{'max_contact_penetration_m':penetration,'replay_trajectory_identical':replay_identical,'final_position_m':rows[-1][:3],'final_velocity_m_s':rows[-1][7:10],'initial_projection_bbox_xyxy':actual_bbox,'initial_projection_mask_iou':projection_evidence['mask_iou']}}
     record['stages'] = {
         'ground_fit_scene': {'inputs': hashes, 'outputs': {name:outputs[name] for name in ('scene.json','heightmap.npz')}, 'parameters': {'radius_m':args.radius,'angle_deg':args.angle,'cell_m':args.cell,'near_depth_m':args.near_depth,'ground_inlier_m':args.ground_inlier}, 'seconds':ground_time+scene_time},
         'simulation_replay': {'inputs': {'scene.json':outputs['scene.json'],'heightmap.npz':outputs['heightmap.npz']}, 'outputs': {name:outputs[name] for name in ('trajectory.json','replay_trajectory.json')}, 'parameters': {'density_kg_m3':args.density,'derived_mass_kg':mass,'friction':args.friction,'speed_m_s':args.speed,'physics_hz':240}, 'seconds':sim_time},
-        'proxy_render_video': {'inputs': {'scene.json':outputs['scene.json'],'heightmap.npz':outputs['heightmap.npz'],'trajectory.json':outputs['trajectory.json']}, 'outputs': {name:hashval for name,hashval in outputs.items() if name.startswith(('depth/','instance_id/')) or name in ('depth.mp4','instance_id.mp4')}, 'parameters': {'fps':30,'width':w,'height':h,'camera':'original fixed DA3'}, 'seconds':render_time}}
+        'proxy_render_video': {'inputs': {'scene.json':outputs['scene.json'],'heightmap.npz':outputs['heightmap.npz'],'trajectory.json':outputs['trajectory.json']}, 'outputs': {name:hashval for name,hashval in outputs.items() if name.startswith(('depth/','instance_id/')) or name in ('depth.mp4','instance_id.mp4','initial_projection.json')}, 'parameters': {'fps':30,'width':w,'height':h,'camera':'original fixed DA3'}, 'seconds':render_time}}
     write_json(out/'run.json',record)
     print(json.dumps({'run_dir':str(out),'frames':int(args.seconds*30),'measurements':record['measurements']},indent=2))
 

@@ -88,6 +88,56 @@ def check(root):
         metrics['mesh_fit_scale']=fit['scale']
         metrics['mesh_fit_yaw_rad']=fit['yaw_rad']
         metrics['mesh_size_reasonable']=fit['size_check']['reasonable']
+    if 'obstacles' in scene:
+        stages=record.get('stages',{})
+        checks['obstacle_stage_provenance']=all(
+            stages.get(stage,{}).get('inputs',{}).get('obstacles.npz')==record['outputs'].get('obstacles.npz')
+            for stage in ('simulation_replay','proxy_render_video'))
+        import numpy as np
+        from PIL import Image
+        obstacles=scene['obstacles']
+        with np.load(root/'obstacles.npz') as data:
+            grid=data['instance_id']
+            road=data['road_cells'].astype(bool)
+            footprint=data['car_footprint'].astype(bool)
+            candidate=data['candidate'].astype(bool)
+        with np.load(root/'heightmap.npz') as data:
+            surface=data['surface_z_m']
+            valid=data['valid'].astype(bool)
+            surface_votes=data['surface_votes']
+            surface_provenance=data['surface_provenance']
+        components=obstacles['components']
+        expected_ids={c['instance_id'] for c in components}
+        actual_ids=set(int(v) for v in np.unique(grid) if v)
+        sizes=[int(np.count_nonzero(grid==c['instance_id'])) for c in components]
+        connected=True
+        for component in components:
+            cells=set(map(tuple,np.argwhere(grid==component['instance_id'])))
+            if not cells:
+                connected=False;continue
+            seen={next(iter(cells))}; pending=list(seen)
+            while pending:
+                y,x=pending.pop()
+                for neighbor in ((y-1,x),(y+1,x),(y,x-1),(y,x+1)):
+                    if neighbor in cells and neighbor not in seen:
+                        seen.add(neighbor);pending.append(neighbor)
+            connected &= seen==cells
+        road_count=int(road.sum())
+        false_count=int(np.count_nonzero(road & (grid>0)))
+        ratio=false_count/road_count if road_count else None
+        image_ids=set()
+        for frame in sorted((root/'instance_id').glob('*.png')):
+            image_ids.update(int(v) for v in np.unique(np.asarray(Image.open(frame))) if v)
+        missing_ids=sorted(expected_ids-image_ids)
+        detection=obstacles['detection']
+        checks['obstacle_parameters']=detection['height_above_plane_m']==params['obstacle_height_m'] and detection['min_pixels_per_cell']==params['obstacle_min_pixels'] and detection['min_cells_per_component']==params['obstacle_min_cells'] and obstacles['render_only']==params['obstacles_render_only']
+        checks['obstacle_components']=connected and actual_ids==expected_ids and [c['cells'] for c in components]==sizes and sizes==m['obstacle_component_sizes_cells'] and len(components)==m['obstacle_component_count'] and all(c['cells']>=params['obstacle_min_cells'] for c in components)
+        checks['obstacle_heightmap']=bool(np.array_equal(candidate,valid & ~footprint & (surface-ground['flat_world_z_m']>params['obstacle_height_m']) & (surface_votes>=params['obstacle_min_pixels'])) and np.all(surface_provenance[footprint]==3))
+        checks['obstacle_road_ratio']=road_count>0 and road_count==obstacles['road_cells']==m['road_cells'] and false_count==obstacles['road_false_positive_cells']==m['road_false_positive_cells'] and ratio==obstacles['road_false_positive_ratio']==m['road_false_positive_ratio']
+        checks['car_footprint_clear']=not np.any(footprint & (grid>0)) and obstacles['car_footprint_obstacle_cells']==0
+        checks['obstacle_render_ids']={1,2}.issubset(image_ids) and image_ids.issubset({1,2}|expected_ids) and not missing_ids
+        checks['obstacle_collision_mode']=all(c['collision_enabled']==(not obstacles['render_only']) and (c['collision_shape_count']>0)==(not obstacles['render_only']) for c in components)
+        metrics.update({'road_false_positive_ratio':ratio,'road_false_positive_cells':false_count,'road_cells':road_count,'obstacle_component_sizes_cells':sizes,'obstacle_rendered_ids':sorted(image_ids & expected_ids),'missing_obstacle_render_ids':missing_ids,'obstacle_collision_shape_counts':[c['collision_shape_count'] for c in components],'obstacles_render_only':obstacles['render_only']})
     return {'passed':all(value is True for value in checks.values()),'checks':checks,'metrics':metrics,'limits':{**limits,'baseline_initial_mask_iou':BASELINE_INITIAL_MASK_IOU},'integrity':integrity}
 
 

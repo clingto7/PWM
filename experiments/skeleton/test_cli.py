@@ -203,6 +203,50 @@ class CheckCliTest(unittest.TestCase):
             self.assertNotEqual(result.returncode,0)
             self.assertFalse(json.loads(result.stdout)['checks']['penetration'])
 
+    def test_three_case_checker_reports_independent_analytic_errors_and_replay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);rec=self.obstacle_fixture(root)
+            scene=json.loads((root/'scene.json').read_text())
+            scene['camera']={'forward':[0,1,0],'up':[0,0,1],'intrinsics':[[100,0,252],[0,100,140],[0,0,1]]}
+            (root/'scene.json').write_text(json.dumps(scene))
+            rec['outputs']['scene.json']=hashlib.sha256((root/'scene.json').read_bytes()).hexdigest()
+            rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
+            rec['parameters'].update({'derived_mass_kg':1000,'friction':.5})
+            initial=[0,0,.5,0,0,0,1,0,0,0,0,0,0]
+            coast=[initial]+[[0,min(i/240,.8),.5,0,0,0,1,0,0,0,0,0,0] for i in range(1,241)]
+            ballistic=[initial]
+            for i in range(1,241):
+                t=i/240
+                airborne=t<2/9.81
+                ballistic.append([0,t if airborne else .2,.5+max(0,t-9.81*t*t/2) if airborne else .5,0,0,0,1,0,1 if airborne else 0,1-9.81*t if airborne else 0,0,0,0])
+            obstacle=[initial]+[[min(i/240,.2),0,.5,0,0,0,1,0,0,0,0,0,0] for i in range(1,241)]
+            specs={}
+            for name,rows,velocity,target in (('coast',coast,[0,1,0],None),('ballistic',ballistic,[0,1,1],None),('obstacle',obstacle,[1,0,0],3)):
+                prefix='' if name=='coast' else name+'/'
+                (root/name).mkdir(exist_ok=True) if prefix else None
+                for filename in ('trajectory.json','replay_trajectory.json'):
+                    path=root/(prefix+filename);path.write_text(json.dumps(rows))
+                    rec['outputs'][prefix+filename]=hashlib.sha256(path.read_bytes()).hexdigest()
+                magnitude=1000*sum(v*v for v in velocity)**.5
+                specs[name]={'delta_velocity_m_s':velocity,'magnitude_n_s':magnitude,'direction':[v/(magnitude/1000) for v in velocity],'application_point':'center_of_mass','application_point_world_m':[0,0,.5],'target_obstacle_id':target}
+                rec.setdefault('impulse_cases',{})[name]={'trajectory':prefix+'trajectory.json','replay':prefix+'replay_trajectory.json','impulse':specs[name],'max_contact_penetration_m':0,'obstacle_contact_samples':1 if name=='obstacle' else 0}
+            (root/'impulses.json').write_text(json.dumps(specs))
+            rec['outputs']['impulses.json']=hashlib.sha256((root/'impulses.json').read_bytes()).hexdigest()
+            (root/'run.json').write_text(json.dumps(rec))
+            report=json.loads(self.invoke(root).stdout)
+            cases=report['metrics']['impulse_cases']
+            self.assertAlmostEqual(cases['coast']['metrics']['expected_distance_m'],1/9.81)
+            self.assertAlmostEqual(cases['ballistic']['metrics']['expected_flight_time_s'],2/9.81)
+            self.assertTrue(cases['ballistic']['checks']['analytical_flight'])
+            self.assertTrue(cases['obstacle']['checks']['solid_target'])
+            self.assertFalse(cases['coast']['checks']['analytical_distance'])
+            replay=json.loads((root/'obstacle/replay_trajectory.json').read_text());replay[-1][0]=.3
+            (root/'obstacle/replay_trajectory.json').write_text(json.dumps(replay))
+            rec['outputs']['obstacle/replay_trajectory.json']=hashlib.sha256((root/'obstacle/replay_trajectory.json').read_bytes()).hexdigest()
+            (root/'run.json').write_text(json.dumps(rec))
+            report=json.loads(self.invoke(root).stdout)
+            self.assertFalse(report['metrics']['impulse_cases']['obstacle']['checks']['replay'])
+
 
 @unittest.skipUnless(os.environ.get('PWM_RUN_INTEGRATION')=='1','requires the pinned PyBullet first-image environment')
 class PipelineObstacleTest(unittest.TestCase):

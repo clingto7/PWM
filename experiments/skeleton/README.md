@@ -1,4 +1,4 @@
-# First-image pipeline skeleton and obstacles
+# First-image pipeline skeleton and impulse cases
 
 Run in the pinned first-image environment, with `ffmpeg` on `PATH`:
 
@@ -6,6 +6,15 @@ Run in the pinned first-image environment, with `ffmpeg` on `PATH`:
 python experiments/skeleton/run.py /path/to/new-run
 python experiments/skeleton/check.py /path/to/new-run
 ```
+
+The run writes a coast trajectory at the root and separate
+`ballistic/` and `obstacle/` trajectories, each with a replay. `impulses.json`
+records the velocity change, impulse magnitude and direction, center of mass
+application point, and obstacle target. The checker reports the measured and
+expected ballistic flight time and range, coast stopping distance, and obstacle
+contact and penetration, plus the shared rest, energy, replay, and camera checks.
+The checker uses provisional 0.05 s flight and 0.5 m range/distance gates until
+the first A800 measurements can set evidence-based limits.
 
 Obstacle options: `--obstacle-height 0.35` (metres above the fitted plane),
 `--obstacle-min-pixels 3` (DA3 votes per grid cell), and

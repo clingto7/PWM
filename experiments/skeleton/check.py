@@ -115,6 +115,66 @@ def check(root):
         checks['obstacle_render_ids']={1,2}.issubset(image_ids) and image_ids.issubset({1,2}|expected_ids) and not missing_ids
         checks['obstacle_collision_mode']=all(c['collision_enabled']==(not obstacles['render_only']) and (c['collision_shape_count']>0)==(not obstacles['render_only']) for c in components)
         metrics.update({'road_false_positive_ratio':ratio,'road_false_positive_cells':false_count,'road_cells':road_count,'obstacle_component_sizes_cells':sizes,'obstacle_rendered_ids':sorted(image_ids & expected_ids),'missing_obstacle_render_ids':missing_ids,'obstacle_collision_shape_counts':[c['collision_shape_count'] for c in components],'obstacles_render_only':obstacles['render_only']})
+    if 'impulse_cases' in record:
+        cases={}
+        impulses=json.loads((root/'impulses.json').read_text())
+        for name in ('coast','ballistic','obstacle'):
+            case=record['impulse_cases'][name]
+            rows=json.loads((root/case['trajectory']).read_text())
+            again=json.loads((root/case['replay']).read_text())
+            impulse=impulses[name]
+            delta=impulse['delta_velocity_m_s']
+            speed=math.sqrt(sum(v*v for v in delta))
+            energy=[sum(v*v for v in row[7:10])/2+9.81*row[2] for row in rows[1:]]
+            gain=max([0]+[b-a for a,b in zip(energy,energy[1:])])
+            last=rows[-1]
+            end_speed=math.sqrt(sum(v*v for v in last[7:10]))
+            penetration=case['max_contact_penetration_m']
+            case_checks={'impulse_record':case['impulse']==impulse and impulse['application_point']=='center_of_mass' and impulse['application_point_world_m']==box['initial_position_m'] and math.isclose(impulse['magnitude_n_s'],params['derived_mass_kg']*speed,rel_tol=1e-9) and all(math.isclose(a,b/speed,abs_tol=1e-9) for a,b in zip(impulse['direction'],delta)),
+                         'initial_stationary':rows[0][:3]==box['initial_position_m'] and all(abs(v)<1e-12 for v in rows[0][7:13]),
+                         'penetration':penetration<=limits['penetration_m'],
+                         'final_rest':end_speed<=limits['final_speed_m_s'] and abs(last[2]-box['size_m'][2]/2-surface)<=limits['resting_height_error_m'],
+                         'no_energy_gain':gain<=limits['energy_gain_j_kg'],
+                         'replay':rows==again}
+            case_metrics={'max_penetration_m':penetration,'final_speed_m_s':end_speed,'max_step_specific_energy_gain_j_kg':gain}
+            if name=='coast':
+                expected=speed**2/(2*params['friction']*9.81) if params['friction'] else math.inf
+                actual=math.hypot(last[0]-rows[0][0],last[1]-rows[0][1])
+                case_metrics.update({'coast_distance_m':actual,'expected_distance_m':expected,'distance_error_m':actual-expected})
+                case_checks['analytical_distance']=abs(actual-expected)<=0.5
+            elif name=='ballistic':
+                base=rows[0][2]
+                airborne=[i for i,row in enumerate(rows) if row[2]>base+0.02]
+                landing=next((i for i in range(airborne[-1]+1,len(rows)) if rows[i][2]<=base+0.02),None) if airborne else None
+                expected_time=2*delta[2]/9.81
+                actual_time=landing/240 if landing is not None else math.inf
+                expected_range=math.hypot(*delta[:2])*expected_time
+                actual_range=math.hypot(rows[landing][0]-rows[0][0],rows[landing][1]-rows[0][1]) if landing is not None else math.inf
+                case_metrics.update({'flight_time_s':actual_time,'expected_flight_time_s':expected_time,'flight_time_error_s':actual_time-expected_time,'range_m':actual_range,'expected_range_m':expected_range,'range_error_m':actual_range-expected_range})
+                case_checks['analytical_flight']=abs(actual_time-expected_time)<=0.05 and abs(actual_range-expected_range)<=0.5
+                forward=scene['camera']['forward'];up=scene['camera']['up']
+                right=[forward[1]*up[2]-forward[2]*up[1],forward[2]*up[0]-forward[0]*up[2],forward[0]*up[1]-forward[1]*up[0]]
+                k=scene['camera']['intrinsics'];width_px=504;height_px=280
+                def visible(row):
+                    for dx in (-box['size_m'][0]/2,box['size_m'][0]/2):
+                        for dy in (-box['size_m'][1]/2,box['size_m'][1]/2):
+                            for dz in (-box['size_m'][2]/2,box['size_m'][2]/2):
+                                point=[row[0]+dx,row[1]+dy,row[2]+dz]
+                                dot=lambda axis:sum(a*b for a,b in zip(axis,point))
+                                depth=dot(forward)
+                                if depth<=0:return False
+                                u=k[0][0]*dot(right)/depth+k[0][2]
+                                v=-k[1][1]*dot(up)/depth+k[1][2]
+                                if not (0<=u<width_px and 0<=v<height_px):return False
+                    return True
+                case_checks['in_camera']=all(visible(row) for row in rows)
+                case_checks['camera_record']=case_checks['in_camera']==m.get('ballistic_in_camera')
+            else:
+                case_checks['solid_target']=impulse['target_obstacle_id'] in {c['instance_id'] for c in scene['obstacles']['components'] if c['collision_enabled']}
+                case_checks['obstacle_impact']=case.get('obstacle_contact_samples',0)>0
+            cases[name]={'checks':case_checks,'metrics':case_metrics,'passed':all(case_checks.values())}
+        checks['impulse_cases']=all(case['passed'] for case in cases.values())
+        metrics['impulse_cases']=cases
     return {'passed':all(value is True for value in checks.values()),'checks':checks,'metrics':metrics,'limits':{**limits,'baseline_initial_mask_iou':BASELINE_INITIAL_MASK_IOU},'integrity':integrity}
 
 

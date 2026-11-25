@@ -173,6 +173,7 @@ def check(root):
             penetration=case['max_contact_penetration_m']
             case_checks={'impulse_record':case['impulse']==impulse and impulse['application_point']=='center_of_mass' and impulse['application_point_world_m']==box['initial_position_m'] and math.isclose(impulse['magnitude_n_s'],params['derived_mass_kg']*speed,rel_tol=1e-9) and all(math.isclose(a,b/speed,abs_tol=1e-9) for a,b in zip(impulse['direction'],delta)),
                          'friction_record':scene.get('contact_friction')=={'ground_lateral_friction':params['friction'],'car_lateral_friction':1.0,'effective_ground_car_friction':params.get('effective_ground_car_friction'),'obstacle_lateral_friction':0.0} and params.get('effective_ground_car_friction')==params['friction'] and params.get('car_lateral_friction')==1.0,
+                         'sleep_record':scene.get('physics_sleep')=={'car_activation_state':'enable_sleeping','activation_state_value':1} and params.get('car_sleep_activation_state')=='enable_sleeping',
                          'initial_stationary':rows[0][:3]==box['initial_position_m'] and all(abs(v)<1e-12 for v in rows[0][7:13]),
                          'penetration':penetration<=limits['penetration_m'],
                          'final_rest':end_linear_speed<=limits['final_speed_m_s'] and abs(last[2]-box['size_m'][2]/2-ground['flat_world_z_m'])<=limits['resting_height_error_m'],

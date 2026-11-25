@@ -224,10 +224,11 @@ class CheckCliTest(unittest.TestCase):
             scene=json.loads((root/'scene.json').read_text())
             scene['camera']={'forward':[0,1,0],'up':[0,0,1],'intrinsics':[[100,0,252],[0,100,140],[0,0,1]]}
             scene['contact_friction']={'ground_lateral_friction':.5,'car_lateral_friction':1.0,'effective_ground_car_friction':.5,'obstacle_lateral_friction':0.0}
+            scene['physics_sleep']={'car_activation_state':'enable_sleeping','activation_state_value':1}
             (root/'scene.json').write_text(json.dumps(scene))
             rec['outputs']['scene.json']=hashlib.sha256((root/'scene.json').read_bytes()).hexdigest()
             rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
-            rec['parameters'].update({'derived_mass_kg':1000,'friction':.5,'car_lateral_friction':1.0,'effective_ground_car_friction':.5})
+            rec['parameters'].update({'derived_mass_kg':1000,'friction':.5,'car_lateral_friction':1.0,'effective_ground_car_friction':.5,'car_sleep_activation_state':'enable_sleeping','obstacle_min_speed_m_s':6})
             initial=[0,0,.5,0,0,0,1,0,0,0,0,0,0]
             coast=[initial]+[[0,min(i/240,.8),.5,0,0,0,1,0,0,0,0,0,0] for i in range(1,241)]
             ballistic=[initial]

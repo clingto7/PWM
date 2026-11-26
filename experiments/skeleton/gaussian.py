@@ -32,7 +32,6 @@ def render(root):
         raise RuntimeError('geometric gsplat rendering requires CUDA')
     record=json.loads((root/'run.json').read_text())
     scene=json.loads((root/'scene.json').read_text())
-    rows=json.loads((root/'trajectory.json').read_text())
     with np.load(root/'heightmap.npz') as data:
         height=data['ground_z_m']; valid=data['valid'].astype(bool); surface=data['surface_z_m']
     with np.load(root/'obstacles.npz') as data:
@@ -94,47 +93,65 @@ def render(root):
     k=np.asarray(scene['camera']['intrinsics'],dtype=np.float32)
     view_gpu=to_gpu(view)[None];k_gpu=to_gpu(k)[None]
     width,height=504,280
-    depth_dir=root/'gaussian_depth';ids_dir=root/'gaussian_instance_id';mix_dir=root/'gaussian_edge_mixing'
-    for directory in (depth_dir,ids_dir,mix_dir): directory.mkdir(exist_ok=False)
-    frame_times=[]
-    for frame in range(int(record['parameters']['seconds']*record['parameters']['video_fps'])):
-        row=rows[min(len(rows)-1,frame*8)]
-        torch.cuda.synchronize();started=time.perf_counter()
-        rotation=Rotation.from_quat(row[3:7])
-        car_world=rotation.apply(car_points)+np.asarray(row[:3])
-        car_world_quats=(rotation*Rotation.from_quat(car_quats[:,[1,2,3,0]])).as_quat()[:,[3,0,1,2]]
-        positions=torch.cat([static_means,to_gpu(car_world)])
-        all_scales=torch.cat([static_scales,local_scales])
-        all_quats=torch.cat([static_quats,to_gpu(car_world_quats)])
-        opacity=torch.full((len(entity_ids),),.98,device=device)
-        scores=[];expected_depth=None;alpha_image=None
-        with torch.no_grad():
-            for batch,features in feature_batches:
-                image,alpha,_=rasterization(positions,all_quats,all_scales,opacity,features,view_gpu,k_gpu,width,height,render_mode='RGB+ED',packed=False,near_plane=.1,far_plane=100)
-                scores.append(image[0,:,:,:len(batch)])
-                if expected_depth is None:
-                    expected_depth=image[0,:,:,-1]
-                    alpha_image=alpha[0,:,:,0]
-        scores=torch.cat(scores,dim=-1)
-        best,best_idx=scores.max(dim=-1)
-        top_two=torch.topk(scores,k=min(2,len(unique_ids)),dim=-1).values
-        mixed=(top_two[:,:,1]>=top_two[:,:,0]*.25) & (top_two[:,:,1]>.02) if len(unique_ids)>1 else torch.zeros_like(best,dtype=torch.bool)
-        visible=(alpha_image>=alpha_threshold)&(best>.02)&torch.isfinite(expected_depth)&(expected_depth>0)
-        id_lookup=torch.as_tensor([int(i) for i in unique_ids],device=device,dtype=torch.int32)
-        rendered_ids=torch.where(visible,id_lookup[best_idx],0).cpu().numpy().astype(np.uint16)
-        millimeters=torch.where(visible,(expected_depth*1000).clamp(1,65535),0).cpu().numpy().astype(np.uint16)
-        mixed=(mixed&visible).to(torch.uint8).cpu().numpy()*255
-        torch.cuda.synchronize();frame_times.append(time.perf_counter()-started)
-        Image.fromarray(rendered_ids).save(ids_dir/f'{frame:04d}.png')
-        Image.fromarray(millimeters).save(depth_dir/f'{frame:04d}.png')
-        Image.fromarray(mixed).save(mix_dir/f'{frame:04d}.png')
-    produced={str(path.relative_to(root)):hashlib.sha256(path.read_bytes()).hexdigest() for directory in (depth_dir,ids_dir,mix_dir) for path in sorted(directory.glob('*.png'))}
+    def render_case(case_root,rows):
+        depth_dir=case_root/'gaussian_depth';ids_dir=case_root/'gaussian_instance_id';mix_dir=case_root/'gaussian_edge_mixing'
+        for directory in (depth_dir,ids_dir,mix_dir): directory.mkdir(exist_ok=False)
+        frame_times=[]
+        for frame in range(int(record['parameters']['seconds']*record['parameters']['video_fps'])):
+            row=rows[min(len(rows)-1,frame*8)]
+            torch.cuda.synchronize();started=time.perf_counter()
+            rotation=Rotation.from_quat(row[3:7])
+            car_world=rotation.apply(car_points)+np.asarray(row[:3])
+            car_world_quats=(rotation*Rotation.from_quat(car_quats[:,[1,2,3,0]])).as_quat()[:,[3,0,1,2]]
+            positions=torch.cat([static_means,to_gpu(car_world)])
+            all_scales=torch.cat([static_scales,local_scales])
+            all_quats=torch.cat([static_quats,to_gpu(car_world_quats)])
+            opacity=torch.full((len(entity_ids),),.98,device=device)
+            scores=[];expected_depth=None;alpha_image=None
+            with torch.no_grad():
+                for batch,features in feature_batches:
+                    image,alpha,_=rasterization(positions,all_quats,all_scales,opacity,features,view_gpu,k_gpu,width,height,render_mode='RGB+ED',packed=False,near_plane=.1,far_plane=100)
+                    scores.append(image[0,:,:,:len(batch)])
+                    if expected_depth is None:
+                        expected_depth=image[0,:,:,-1]
+                        alpha_image=alpha[0,:,:,0]
+            scores=torch.cat(scores,dim=-1)
+            best,best_idx=scores.max(dim=-1)
+            top_two=torch.topk(scores,k=min(2,len(unique_ids)),dim=-1).values
+            mixed=(top_two[:,:,1]>=top_two[:,:,0]*.25) & (top_two[:,:,1]>.02) if len(unique_ids)>1 else torch.zeros_like(best,dtype=torch.bool)
+            visible=(alpha_image>=alpha_threshold)&(best>.02)&torch.isfinite(expected_depth)&(expected_depth>0)
+            id_lookup=torch.as_tensor([int(i) for i in unique_ids],device=device,dtype=torch.int32)
+            rendered_ids=torch.where(visible,id_lookup[best_idx],0).cpu().numpy().astype(np.uint16)
+            millimeters=torch.where(visible,(expected_depth*1000).clamp(1,65535),0).cpu().numpy().astype(np.uint16)
+            mixed=(mixed&visible).to(torch.uint8).cpu().numpy()*255
+            torch.cuda.synchronize();frame_times.append(time.perf_counter()-started)
+            Image.fromarray(rendered_ids).save(ids_dir/f'{frame:04d}.png')
+            Image.fromarray(millimeters).save(depth_dir/f'{frame:04d}.png')
+            Image.fromarray(mixed).save(mix_dir/f'{frame:04d}.png')
+        produced={str(path.relative_to(root)):hashlib.sha256(path.read_bytes()).hexdigest()
+                  for directory in (depth_dir,ids_dir,mix_dir) for path in sorted(directory.glob('*.png'))}
+        return produced,frame_times
+    cases=('coast','ballistic','obstacle') if record['parameters'].get('render_all_cases') else ('coast',)
+    produced={};frame_times_by_case={}
+    for name in cases:
+        case_root=root if name=='coast' else root/name
+        rows=json.loads((case_root/'trajectory.json').read_text())
+        case_outputs,case_times=render_case(case_root,rows)
+        produced.update(case_outputs);frame_times_by_case[name]=case_times
+    frame_times=frame_times_by_case['coast']
     record['outputs'].update(produced)
     record['gaussian']={'image_size_wh':[width,height],'camera':'scene.json original fixed DA3','sampling':{'method':'one disk per valid ground quad; five box-face disks per obstacle cell; area-weighted car triangle barycentric disks','seed':42,'ground_xy_sigma_cell_fraction':.68,'obstacle_face_sigma_fraction':.68,'car_disk_sigma_m':float(car_scales[0,0]),'opacity':.98,'no_optimization':True},'entity_counts':counts,'frame_times_s':frame_times,'raster_frame_times_s':record['raster_frame_times_s'],'alpha_threshold':alpha_threshold,'feature_method':'chunked one-hot RGB+ED, argmax; all entities occlude each pass','depth_method':'gsplat expected optical z depth (ED); zero on uncovered pixels','fallback':'none; accepted #7 confirms gsplat 1.5.3 RGB+ED and four features','edge_mixing_rule':'second one-hot score >= 25% of highest and > 0.02'}
+    record['gaussian']['frame_times_by_case_s']=frame_times_by_case
     record['versions']['gsplat']=version('gsplat');record['versions']['torch']=torch.__version__
-    record['timings_s']['gaussian_render']=sum(frame_times)
-    record['timings_s']['total']+=sum(frame_times)
-    record['stages']['gaussian_render']={'inputs':{name:record['outputs'][name] for name in ('scene.json','heightmap.npz','obstacles.npz','fitted_car.obj','trajectory.json')},'outputs':produced,'parameters':record['gaussian']['sampling'],'seconds':sum(frame_times)}
+    render_seconds=sum(sum(times) for times in frame_times_by_case.values())
+    record['timings_s']['gaussian_render']=render_seconds
+    record['timings_s']['total']+=render_seconds
+    stage_inputs={name:record['outputs'][name] for name in ('scene.json','heightmap.npz','obstacles.npz','fitted_car.obj','trajectory.json')}
+    for name in cases:
+        if name!='coast':
+            path=f'{name}/trajectory.json'
+            stage_inputs[path]=record['outputs'][path]
+    record['stages']['gaussian_render']={'inputs':stage_inputs,'outputs':produced,'parameters':record['gaussian']['sampling'],'seconds':render_seconds}
     (root/'run.json').write_text(json.dumps(record,indent=2,sort_keys=True)+'\n')
 
 

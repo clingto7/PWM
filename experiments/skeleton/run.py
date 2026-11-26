@@ -323,7 +323,8 @@ def build(args):
             obstacle_speed=min(15.,max(args.obstacle_min_speed,math.sqrt(2*args.friction*9.81*travel_to_contact+1.0)))
         else:
             direction=np.array([0.,1.,0.]);obstacle_speed=args.speed;target_id=None
-        impulses={'coast':[0.,args.speed,0.], 'ballistic':[0.,args.speed,args.ballistic_up_speed], 'obstacle':(direction*obstacle_speed).tolist()}
+        coast_speed=args.coast_speed if args.coast_speed is not None else args.speed
+        impulses={'coast':[0.,coast_speed,0.], 'ballistic':[0.,args.speed,args.ballistic_up_speed], 'obstacle':(direction*obstacle_speed).tolist()}
         specifications={name:{'delta_velocity_m_s':velocity,'magnitude_n_s':mass*math.sqrt(sum(v*v for v in velocity)), 'direction':(np.asarray(velocity)/math.sqrt(sum(v*v for v in velocity))).tolist(),'application_point':'center_of_mass','application_point_world_m':car_pos,'target_obstacle_id':target_id if name=='obstacle' else None} for name,velocity in impulses.items()}
         def trajectory(velocity):
             pos,quat=p.getBasePositionAndOrientation(body)
@@ -366,42 +367,48 @@ def build(args):
         fx,fy,cx0,cy0=float(k[0,0]),float(k[1,1]),float(k[0,2]),float(k[1,2])
         projection=[2*fx/w,0,0,0,0,2*fy/h,0,0,1-2*cx0/w,2*cy0/h-1,(far+near)/(near-far),-1,0,0,2*far*near/(near-far),0]
         view=p.computeViewMatrix([0,0,0],camera_forward,camera_up)
-        depth_dir=out/'depth'; ids_dir=out/'instance_id'; depth_dir.mkdir();ids_dir.mkdir()
-        depth_video=out/'depth.mp4'; id_video=out/'instance_id.mp4'
         def encoder(path):
             return subprocess.Popen(['ffmpeg','-hide_banner','-loglevel','error','-y','-f','rawvideo','-pix_fmt','gray','-s',f'{w}x{h}','-r','30','-i','-','-an','-c:v','libx264','-pix_fmt','yuv420p',str(path)],stdin=subprocess.PIPE)
-        enc_depth,enc_id=encoder(depth_video),encoder(id_video)
-        raster_frame_times=[]
-        try:
-            for frame in range(int(args.seconds*30)):
-                row=rows[min(len(rows)-1,frame*8)]
-                frame_start=time.perf_counter()
-                p.resetBasePositionAndOrientation(body,row[:3],row[3:7])
-                _,_,_,zbuf,seg=p.getCameraImage(w,h,viewMatrix=view,projectionMatrix=projection,renderer=p.ER_TINY_RENDERER,flags=p.ER_SEGMENTATION_MASK_OBJECT_AND_LINKINDEX)
-                zbuf=np.asarray(zbuf).reshape(h,w)
-                metric=far*near/(far-(far-near)*zbuf)
-                raw=np.asarray(seg,dtype=np.int32).reshape(h,w)
-                ids=np.zeros((h,w),dtype=np.uint16)
-                ids[(raw & 0xffffff) == ground]=1
-                ids[(raw & 0xffffff) == body]=2
-                for obstacle_body,instance_id in obstacle_bodies.items():
-                    ids[(raw & 0xffffff) == obstacle_body]=instance_id
-                ids[raw<0]=0
-                # Zero is invalid/no entity; foreground retains metric mm.
-                millimeters=np.where(ids>0,np.clip(metric*1000,1,65535),0).astype(np.uint16)
-                raster_frame_times.append(time.perf_counter()-frame_start)
-                Image.fromarray(millimeters).save(depth_dir/f'{frame:04d}.png')
-                Image.fromarray(ids).save(ids_dir/f'{frame:04d}.png')
-                if frame == 0:
-                    first_ids=ids.copy()
-                enc_depth.stdin.write(np.where(ids>0,np.clip(metric/args.radius*255,0,255),0).astype(np.uint8).tobytes())
-                enc_id.stdin.write(np.clip(ids*53,0,255).astype(np.uint8).tobytes())
-        finally:
-            enc_depth.stdin.close();enc_id.stdin.close()
-            depth_status = enc_depth.wait()
-            id_status = enc_id.wait()
-            if depth_status != 0 or id_status != 0:
-                raise RuntimeError('ffmpeg failed')
+        def render_case(case_root,case_rows):
+            depth_dir=case_root/'depth';ids_dir=case_root/'instance_id'
+            depth_dir.mkdir();ids_dir.mkdir()
+            enc_depth,enc_id=encoder(case_root/'depth.mp4'),encoder(case_root/'instance_id.mp4')
+            times=[];initial_ids=None
+            try:
+                for frame in range(int(args.seconds*30)):
+                    row=case_rows[min(len(case_rows)-1,frame*8)]
+                    frame_start=time.perf_counter()
+                    p.resetBasePositionAndOrientation(body,row[:3],row[3:7])
+                    _,_,_,zbuf,seg=p.getCameraImage(w,h,viewMatrix=view,projectionMatrix=projection,renderer=p.ER_TINY_RENDERER,flags=p.ER_SEGMENTATION_MASK_OBJECT_AND_LINKINDEX)
+                    zbuf=np.asarray(zbuf).reshape(h,w)
+                    metric=far*near/(far-(far-near)*zbuf)
+                    raw=np.asarray(seg,dtype=np.int32).reshape(h,w)
+                    ids=np.zeros((h,w),dtype=np.uint16)
+                    ids[(raw & 0xffffff) == ground]=1
+                    ids[(raw & 0xffffff) == body]=2
+                    for obstacle_body,instance_id in obstacle_bodies.items():
+                        ids[(raw & 0xffffff) == obstacle_body]=instance_id
+                    ids[raw<0]=0
+                    # Zero is invalid/no entity; foreground retains metric mm.
+                    millimeters=np.where(ids>0,np.clip(metric*1000,1,65535),0).astype(np.uint16)
+                    times.append(time.perf_counter()-frame_start)
+                    Image.fromarray(millimeters).save(depth_dir/f'{frame:04d}.png')
+                    Image.fromarray(ids).save(ids_dir/f'{frame:04d}.png')
+                    if frame==0:initial_ids=ids.copy()
+                    enc_depth.stdin.write(np.where(ids>0,np.clip(metric/args.radius*255,0,255),0).astype(np.uint8).tobytes())
+                    enc_id.stdin.write(np.clip(ids*53,0,255).astype(np.uint8).tobytes())
+            finally:
+                enc_depth.stdin.close();enc_id.stdin.close()
+                depth_status=enc_depth.wait();id_status=enc_id.wait()
+                if depth_status!=0 or id_status!=0:
+                    raise RuntimeError('ffmpeg failed')
+            return initial_ids,times
+        first_ids,raster_frame_times=render_case(out,rows)
+        raster_frame_times_by_case={'coast':raster_frame_times}
+        if args.render_all_cases:
+            for name in ('ballistic','obstacle'):
+                _,case_times=render_case(out/name,trajectories[name])
+                raster_frame_times_by_case[name]=case_times
         # Store pixel runs from the actual first ID render and resized SAM mask.
         def runs(mask):
             result=[]
@@ -435,16 +442,26 @@ def build(args):
         return True
     ballistic_visible=all(in_camera(row) for row in trajectories['ballistic'])
     outputs={str(path.relative_to(out)):digest(path) for path in sorted(out.rglob('*')) if path.is_file()}
-    record={'schema':2,'inputs':{name:{'path':str(path.resolve()),'sha256':hashes[name]} for name,path in inputs.items()},'outputs':outputs,'parameters':{'radius_m':args.radius,'angle_deg':args.angle,'cell_m':args.cell,'friction':args.friction,'car_lateral_friction':1.0,'effective_ground_car_friction':args.friction,'density_kg_m3':args.density,'derived_mass_kg':mass,'near_depth_m':args.near_depth,'ground_inlier_m':args.ground_inlier,'speed_m_s':args.speed,'obstacle_min_speed_m_s':args.obstacle_min_speed,'car_sleep_activation_state':'enable_sleeping','seconds':args.seconds,'physics_hz':240,'obstacle_height_m':args.obstacle_height,'obstacle_min_pixels':args.obstacle_min_pixels,'obstacle_min_cells':args.obstacle_min_cells,'obstacles_render_only':args.obstacles_render_only,'video_fps':30},'timings_s':{'ground_fit':ground_time,'scene_build':scene_time,'simulation_and_replay':sim_time,'render_and_video':render_time,'total':time.perf_counter()-start},'versions':{'python':platform.python_version(),'numpy':version('numpy'),'pillow':version('pillow'),'pybullet':version('pybullet'),'pybullet_api':p.getAPIVersion(),'ffmpeg':subprocess.check_output(['ffmpeg','-version'],text=True).splitlines()[0]},'measurements':{'max_contact_penetration_m':penetration,'replay_trajectory_identical':replay_identical,'final_position_m':rows[-1][:3],'final_velocity_m_s':rows[-1][7:10],'initial_projection_bbox_xyxy':actual_bbox,'initial_projection_mask_iou':projection_evidence['mask_iou'],'mesh_fit':mesh_fit,'road_false_positive_ratio':false_ratio,'road_false_positive_cells':road_false,'road_cells':road_count,'obstacle_component_sizes_cells':[component['cells'] for component in components],'obstacle_component_count':len(components)}}
+    record={'schema':2,'inputs':{name:{'path':str(path.resolve()),'sha256':hashes[name]} for name,path in inputs.items()},'outputs':outputs,'parameters':{'radius_m':args.radius,'angle_deg':args.angle,'cell_m':args.cell,'friction':args.friction,'car_lateral_friction':1.0,'effective_ground_car_friction':args.friction,'density_kg_m3':args.density,'derived_mass_kg':mass,'near_depth_m':args.near_depth,'ground_inlier_m':args.ground_inlier,'speed_m_s':args.speed,'coast_speed_m_s':coast_speed,'render_all_cases':args.render_all_cases,'obstacle_min_speed_m_s':args.obstacle_min_speed,'car_sleep_activation_state':'enable_sleeping','seconds':args.seconds,'physics_hz':240,'obstacle_height_m':args.obstacle_height,'obstacle_min_pixels':args.obstacle_min_pixels,'obstacle_min_cells':args.obstacle_min_cells,'obstacles_render_only':args.obstacles_render_only,'video_fps':30},'timings_s':{'ground_fit':ground_time,'scene_build':scene_time,'simulation_and_replay':sim_time,'render_and_video':render_time,'total':time.perf_counter()-start},'versions':{'python':platform.python_version(),'numpy':version('numpy'),'pillow':version('pillow'),'pybullet':version('pybullet'),'pybullet_api':p.getAPIVersion(),'ffmpeg':subprocess.check_output(['ffmpeg','-version'],text=True).splitlines()[0]},'measurements':{'max_contact_penetration_m':penetration,'replay_trajectory_identical':replay_identical,'final_position_m':rows[-1][:3],'final_velocity_m_s':rows[-1][7:10],'initial_projection_bbox_xyxy':actual_bbox,'initial_projection_mask_iou':projection_evidence['mask_iou'],'mesh_fit':mesh_fit,'road_false_positive_ratio':false_ratio,'road_false_positive_cells':road_false,'road_cells':road_count,'obstacle_component_sizes_cells':[component['cells'] for component in components],'obstacle_component_count':len(components)}}
     record['stages'] = {
         'ground_fit_scene': {'inputs': hashes, 'outputs': {name:outputs[name] for name in ('scene.json','heightmap.npz','fitted_car.obj','car_collision_hull.obj','obstacles.npz')}, 'parameters': {'radius_m':args.radius,'angle_deg':args.angle,'cell_m':args.cell,'near_depth_m':args.near_depth,'ground_inlier_m':args.ground_inlier,'obstacle_height_m':args.obstacle_height,'obstacle_min_pixels':args.obstacle_min_pixels,'obstacle_min_cells':args.obstacle_min_cells,'obstacles_render_only':args.obstacles_render_only}, 'seconds':ground_time+scene_time},
-        'simulation_replay': {'inputs': {'scene.json':outputs['scene.json'],'heightmap.npz':outputs['heightmap.npz'],'fitted_car.obj':outputs['fitted_car.obj'],'car_collision_hull.obj':outputs['car_collision_hull.obj'],'obstacles.npz':outputs['obstacles.npz']}, 'outputs': {name:outputs[name] for name in ('trajectory.json','replay_trajectory.json')}, 'parameters': {'density_kg_m3':args.density,'derived_mass_kg':mass,'friction':args.friction,'speed_m_s':args.speed,'obstacle_min_speed_m_s':args.obstacle_min_speed,'car_sleep_activation_state':'enable_sleeping','physics_hz':240,'obstacles_render_only':args.obstacles_render_only}, 'seconds':sim_time},
+        'simulation_replay': {'inputs': {'scene.json':outputs['scene.json'],'heightmap.npz':outputs['heightmap.npz'],'fitted_car.obj':outputs['fitted_car.obj'],'car_collision_hull.obj':outputs['car_collision_hull.obj'],'obstacles.npz':outputs['obstacles.npz']}, 'outputs': {name:outputs[name] for name in ('trajectory.json','replay_trajectory.json')}, 'parameters': {'density_kg_m3':args.density,'derived_mass_kg':mass,'friction':args.friction,'speed_m_s':args.speed,'coast_speed_m_s':coast_speed,'obstacle_min_speed_m_s':args.obstacle_min_speed,'car_sleep_activation_state':'enable_sleeping','physics_hz':240,'obstacles_render_only':args.obstacles_render_only}, 'seconds':sim_time},
         'proxy_render_video': {'inputs': {'scene.json':outputs['scene.json'],'heightmap.npz':outputs['heightmap.npz'],'trajectory.json':outputs['trajectory.json'],'obstacles.npz':outputs['obstacles.npz'],'fitted_car.obj':outputs['fitted_car.obj']}, 'outputs': {name:hashval for name,hashval in outputs.items() if name.startswith(('depth/','instance_id/')) or name in ('depth.mp4','instance_id.mp4','initial_projection.json')}, 'parameters': {'fps':30,'width':w,'height':h,'camera':'original fixed DA3'}, 'seconds':render_time}}
     record['impulse_cases']={name:{'trajectory':('' if name=='coast' else name+'/')+'trajectory.json','replay':('' if name=='coast' else name+'/')+'replay_trajectory.json','impulse':specifications[name],'inertia_diagonal_kg_m2':inertia_diagonal,'max_contact_penetration_m':penetrations[name],'obstacle_contact_samples_by_id':hits[name]} for name in impulses}
     record['parameters']['ballistic_up_speed_m_s']=args.ballistic_up_speed
     record['measurements']['ballistic_in_camera']=ballistic_visible
     record['stages']['simulation_replay']['outputs'].update({name:outputs[name] for name in outputs if name.startswith(('ballistic/','obstacle/')) or name=='impulses.json'})
     record['raster_frame_times_s']=raster_frame_times
+    record['raster_frame_times_by_case_s']=raster_frame_times_by_case
+    if args.render_all_cases:
+        proxy=record['stages']['proxy_render_video']
+        proxy['parameters']['render_all_cases']=True
+        for name in ('ballistic','obstacle'):
+            trajectory_name=f'{name}/trajectory.json'
+            proxy['inputs'][trajectory_name]=outputs[trajectory_name]
+            proxy['outputs'].update({path:hashval for path,hashval in outputs.items()
+                                     if path.startswith((f'{name}/depth/',f'{name}/instance_id/'))
+                                     or path in (f'{name}/depth.mp4',f'{name}/instance_id.mp4')})
     if args.render_gaussians:
         record['required_renderers']=['raster','gaussian']
     write_json(out/'run.json',record)
@@ -462,6 +479,7 @@ if __name__=='__main__':
     parser.add_argument('--friction',type=float,default=.6)
     parser.add_argument('--density',type=float,default=500)
     parser.add_argument('--speed',type=float,default=3)
+    parser.add_argument('--coast-speed',type=float,help='independent coast launch speed in m/s; defaults to --speed')
     parser.add_argument('--obstacle-min-speed',type=float,default=6)
     parser.add_argument('--ballistic-up-speed',type=float,default=2)
     parser.add_argument('--near-depth',type=float,default=18)
@@ -472,8 +490,11 @@ if __name__=='__main__':
     parser.add_argument('--obstacles-render-only',action='store_true')
     parser.add_argument('--seconds',type=float,default=5)
     parser.add_argument('--render-gaussians',action='store_true',help='also render geometric gsplat frames (requires CUDA)')
+    parser.add_argument('--render-all-cases',action='store_true',help='render ballistic and obstacle frames/videos as well as coast')
     args=parser.parse_args()
     values=(args.radius,args.angle,args.cell,args.near_depth,args.ground_inlier,args.obstacle_height,args.friction,args.density,args.speed,args.obstacle_min_speed,args.ballistic_up_speed,args.seconds)
     if not (all(math.isfinite(value) for value in values) and 0 < args.radius <= 100 and 0 < args.angle < 180 and 0 < args.cell <= args.radius/2 and 0 < args.near_depth <= args.radius and 0 < args.ground_inlier <= 2 and 0 < args.obstacle_height <= 10 and 1 <= args.obstacle_min_pixels <= 1000 and 1 <= args.obstacle_min_cells <= 1000 and 0 <= args.friction <= 2 and 0 < args.density <= 10000 and 0 < args.speed <= 100 and 0 < args.obstacle_min_speed <= 15 and 0 < args.seconds <= 60 and int(args.seconds*240) >= 1 and int(args.seconds*30) >= 1):
         parser.error('invalid parameter range: require positive radius/cell/density/speed/duration/inlier; angle (0,180), near-depth <= radius, friction [0,2], and at least one physics and video frame')
+    if args.coast_speed is not None and (not math.isfinite(args.coast_speed) or not 0 < args.coast_speed <= 100):
+        parser.error('coast speed must be finite and in (0,100] m/s')
     build(args)

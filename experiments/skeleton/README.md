@@ -8,6 +8,20 @@ python experiments/skeleton/check.py /path/to/new-run
 python experiments/skeleton/conclude.py /path/to/new-run
 ```
 
+For a visual comparison of all three motions, use `--render-all-cases`.
+`--coast-speed` changes only the sliding case; ballistic keeps `--speed`, and
+the obstacle case keeps its independently sized launch. For example:
+
+```sh
+python experiments/skeleton/run.py /path/to/new-run --coast-speed 7 --render-all-cases --render-gaussians
+```
+
+The coast raster videos remain at the run root. Ballistic and obstacle raster
+videos and frames live in their respective subdirectories. With Gaussian
+rendering enabled, each case also gets Gaussian depth and instance PNG frames.
+The Gaussian comparison checker continues to use the coast frames as its
+baseline; all additional frames and videos are hashed in the chain record.
+
 The conclusion command writes `first_round_conclusion.json` in the run
 directory. Its `content_sha256` hashes canonical JSON without that digest
 field, and `source_run_sha256` identifies the run record. Prototype gates in

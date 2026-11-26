@@ -32,13 +32,13 @@ class SceneArtifacts:
         paths=self.files()
         scene=json.loads(paths['scene.json'].read_text())
         with np.load(paths['heightmap.npz']) as heightmap:
-            heights=heightmap['ground_z_m']
+            heights=heightmap['ground_z_exact_m'] if 'ground_z_exact_m' in heightmap else heightmap['ground_z_m']
             valid=heightmap['valid'].astype(bool)
-            surface=heightmap['surface_z_m']
+            surface=heightmap['surface_z_exact_m'] if 'surface_z_exact_m' in heightmap else heightmap['surface_z_m']
         with np.load(paths['obstacles.npz']) as obstacle_data:
             component_ids=obstacle_data['instance_id']
         cell=float(scene['ground']['cell_m']); n=heights.shape[0]
-        origin=-(n-1)*cell/2
+        origin=-(n-1)/2*cell
         vertices=[[origin+i*cell,j*cell,float(heights[j,i])]
                   for j in range(n) for i in range(n)]
         indices=[]

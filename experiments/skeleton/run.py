@@ -43,54 +43,35 @@ def build(args):
     hashes = {name: digest(path) for name, path in inputs.items()}
     write_json(out/'bundle.json', {'schema': 1, 'inputs': bundled, 'source_sha256': hashes, 'revision': revision(), 'arguments': {key: value for key, value in vars(args).items() if key not in ('output', 'bundle')}})
     reconstruction=reconstruct(inputs,args,out,start)
-    k=reconstruction.k
-    w=reconstruction.w
-    h=reconstruction.h
-    car=reconstruction.car
-    right=reconstruction.right
-    forward=reconstruction.forward
-    normal=reconstruction.normal
-    camera_forward=reconstruction.camera_forward
-    camera_up=reconstruction.camera_up
-    flat_z=reconstruction.flat_z
-    half_angle=reconstruction.half_angle
-    vertices=reconstruction.vertices
-    indices=reconstruction.indices
-    components=reconstruction.components
-    obstacle_meshes=reconstruction.obstacle_meshes
-    hull=reconstruction.hull
-    car_pos=reconstruction.car_pos
-    car_orientation=reconstruction.car_orientation
-    mass=reconstruction.mass
-    width=reconstruction.width
-    length=reconstruction.length
-    box_h=reconstruction.box_h
-    scene=reconstruction.scene
-    mesh_fit=reconstruction.mesh_fit
-    target=reconstruction.target
-    residual=reconstruction.residual
-    ground_time=reconstruction.ground_time
-    scene_time=reconstruction.scene_time
-    component_ids=reconstruction.component_ids
-    origin_x=reconstruction.origin_x
-    tops=reconstruction.tops
-    a=reconstruction.a
-    b=reconstruction.b
-    c=reconstruction.c
-    height=reconstruction.height
-    pitch=reconstruction.pitch
-    road=reconstruction.road
-    road_count=reconstruction.road_count
-    road_false=reconstruction.road_false
-    false_ratio=reconstruction.false_ratio
-    fitted_mesh=reconstruction.fitted_mesh
-    scene_artifacts=SceneArtifacts(out)
+    scene_artifacts=reconstruction.artifacts
     scene_artifacts.files()
+    scene=json.loads((out/'scene.json').read_text())
+    geometry=scene_artifacts.load()
+    k=np.asarray(scene['camera']['intrinsics'])
+    h,w=280,504
+    car=np.asarray(Image.open(inputs['sam_car']).convert('L').resize((w,h),Image.Resampling.NEAREST))>127
+    a,b,c=scene['ground']['plane_z_ax_by_c']
+    normal=np.array([-a,-b,1.0]);normal/=np.linalg.norm(normal)
+    forward=np.array([0.,1.,0.]);forward-=np.dot(forward,normal)*normal;forward/=np.linalg.norm(forward)
+    right=np.cross(forward,normal)
+    camera_forward=scene['camera']['forward'];camera_up=scene['camera']['up']
+    components=scene['obstacles']['components']
+    car_pos=scene['car']['initial_position_m'];mass=scene['car']['mass_kg']
+    width,length,box_h=scene['car']['size_m']
+    mesh_fit=scene['car']['mesh_fit'];target=scene['car']['box_fit']['reference_bbox_xyxy']
+    ground_time=reconstruction.ground_time;scene_time=reconstruction.scene_time
+    with np.load(out/'obstacles.npz') as data: component_ids=data['instance_id']
+    with np.load(out/'heightmap.npz') as data:
+        tops=data['surface_z_exact_m'] if 'surface_z_exact_m' in data else data['surface_z_m']
+    origin_x=-(component_ids.shape[0]-1)/2*args.cell
+    road_count=scene['obstacles']['road_cells']
+    road_false=scene['obstacles']['road_false_positive_cells']
+    false_ratio=scene['obstacles']['road_false_positive_ratio']
     sim_start = time.perf_counter()
     client = p.connect(p.DIRECT)
     try:
         solver=PyBulletSolver(p)
-        ground, body, obstacle_bodies = solver.create_world(reconstruction,args,out)
+        ground, body, obstacle_bodies = solver.create_world(geometry,args,out)
         inertia_diagonal=list(p.getDynamicsInfo(body,-1)[2])
         shape_counts={instance_id:len(p.getCollisionShapeData(obstacle_body,-1)) for obstacle_body,instance_id in obstacle_bodies.items()}
         for component in components:
@@ -121,10 +102,10 @@ def build(args):
         for name,velocity in impulses.items():
             if name!='coast':
                 p.disconnect(client);client=p.connect(p.DIRECT)
-                ground,body,obstacle_bodies=solver.create_world(reconstruction,args,out)
+                ground,body,obstacle_bodies=solver.create_world(geometry,args,out)
             case_rows,penetrations[name],hits[name]=solver.solve(body,obstacle_bodies,velocity,args.seconds)
             p.disconnect(client);client=p.connect(p.DIRECT)
-            ground,body,obstacle_bodies=solver.create_world(reconstruction,args,out)
+            ground,body,obstacle_bodies=solver.create_world(geometry,args,out)
             replay,_,_=solver.solve(body,obstacle_bodies,velocity,args.seconds)
             trajectories[name]=case_rows;replays[name]=replay
             prefix='' if name=='coast' else name+'/'

@@ -18,49 +18,11 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + '\n')
 
 
-@dataclass
-class SceneBuild:
-    k: object
-    w: object
-    h: object
-    car: object
-    right: object
-    forward: object
-    normal: object
-    camera_forward: object
-    camera_up: object
-    flat_z: object
-    half_angle: object
-    vertices: object
-    indices: object
-    components: object
-    obstacle_meshes: object
-    hull: object
-    car_pos: object
-    car_orientation: object
-    mass: object
-    width: object
-    length: object
-    box_h: object
-    scene: object
-    mesh_fit: object
-    target: object
-    residual: object
-    ground_time: object
-    scene_time: object
-    component_ids: object
-    origin_x: object
-    tops: object
-    a: object
-    b: object
-    c: object
-    height: object
-    pitch: object
-    road: object
-    road_count: object
-    road_false: object
-    false_ratio: object
-    fitted_mesh: object
+@dataclass(frozen=True)
+class Reconstruction:
+    artifacts: object
+    ground_time: float
+    scene_time: float
 
 
 def reconstruct(inputs, args, out, start):
@@ -202,7 +164,7 @@ def reconstruct(inputs, args, out, start):
                 indices.extend([q,q+1,q+n,q+1,q+n+1,q+n])
     if not indices:
         raise ValueError('empty scene sector')
-    np.savez_compressed(out/'heightmap.npz', z_m=grid_z.astype(np.float32), ground_z_m=grid_z.astype(np.float32), surface_z_m=tops.astype(np.float32), valid=valid_grid.astype(np.uint8), provenance=provenance, surface_provenance=surface_provenance, surface_votes=votes)
+    np.savez_compressed(out/'heightmap.npz', z_m=grid_z.astype(np.float32), ground_z_m=grid_z.astype(np.float32), surface_z_m=tops.astype(np.float32), ground_z_exact_m=grid_z, surface_z_exact_m=tops, valid=valid_grid.astype(np.uint8), provenance=provenance, surface_provenance=surface_provenance, surface_votes=votes)
     # The visible car is excluded from both mesh and collision generation; the fitted
     # plane spans its footprint, including pixels hidden by the original car.
     ys_car, xs_car = np.nonzero(car)
@@ -289,5 +251,5 @@ def reconstruct(inputs, args, out, start):
     scene['obstacles']={'components':components,'component_count':len(components),'detection':{'height_above_plane_m':args.obstacle_height,'min_pixels_per_cell':args.obstacle_min_pixels,'min_cells_per_component':args.obstacle_min_cells,'connectivity':4,'source':'DA3 metric depth outside car mask, including non-road pixels'},'render_only':args.obstacles_render_only,'road_cells':road_count,'road_false_positive_cells':road_false,'road_false_positive_ratio':false_ratio,'car_footprint_obstacle_cells':int(np.count_nonzero(car_grid & (component_ids>0))),'instance_id_file':'obstacles.npz'}
     write_json(out/'scene.json', scene)
     scene_time = time.perf_counter()-grid_start
-    state=locals()
-    return SceneBuild(**{name: state[name] for name in SceneBuild.__dataclass_fields__})
+    from artifacts import SceneArtifacts
+    return Reconstruction(SceneArtifacts(out),ground_time,scene_time)

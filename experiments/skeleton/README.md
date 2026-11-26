@@ -134,12 +134,12 @@ rather than claiming bitwise determinism.
 ## Module interfaces
 
 `scene.reconstruct(inputs, args, output, start)` consumes the four bundled
-inputs and run settings, writes the explicit `SceneArtifacts` set, and returns
-prepared `SceneBuild` geometry for the current process. `artifacts.SceneArtifacts.load()` rebuilds collision and visual geometry from
+inputs and run settings, writes the explicit `SceneArtifacts` set, and returns a `Reconstruction` containing the saved artifact set and
+construction timings. `artifacts.SceneArtifacts.load()` rebuilds collision and visual geometry from
 portable files without the original model inputs. `SceneArtifacts` validates
 the saved set: `scene.json`, `heightmap.npz`,
 `obstacles.npz`, `fitted_car.obj`, and `car_collision_hull.obj`.
-`physics.PyBulletSolver.create_world(scene_build, settings, output)` creates
+`physics.PyBulletSolver.create_world(scene_artifacts.load(), settings, output)` creates
 the static collision world and vehicle; `solve(body, obstacle_body_ids,
 delta_velocity, seconds)` returns states, maximum penetration, and obstacle
 contact counts. A replacement solver implements these two operations. `raster.RasterRenderer.render(trajectory,
@@ -157,3 +157,5 @@ python experiments/skeleton/raster_replay.py /path/to/run /path/to/empty-replay-
 `run.py` uses this same saved-artifact path for its separate raster replay.
 Bundle source hashes are checked before reproduction, and reproduction output
 must be outside the source bundle.
+
+New heightmaps retain the historical float32 layers and add float64 `ground_z_exact_m` and `surface_z_exact_m` for byte-exact raster replay. `SceneArtifacts.load()` falls back to float32 layers for historical runs.

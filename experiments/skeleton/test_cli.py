@@ -201,6 +201,48 @@ class CheckCliTest(unittest.TestCase):
             self.assertNotEqual(result.returncode,0)
             self.assertFalse(json.loads(result.stdout)['checks']['gaussian_required'])
 
+    def test_reproduce_rejects_modified_bundle_and_nested_output(self):
+        reproduce=RUN.with_name('reproduce.py')
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)/'bundle';(root/'inputs').mkdir(parents=True)
+            names={'image':'input.jpg','da3':'prediction.npz','sam_car':'car_mask.png','hunyuan_mesh':'car_shape.glb'}
+            paths={name:'inputs/'+filename for name,filename in names.items()}
+            for path in paths.values(): (root/path).write_bytes(b'original')
+            manifest={'schema':1,'inputs':paths,'source_sha256':{name:hashlib.sha256(b'original').hexdigest() for name in names},'revision':'wrong','arguments':{}}
+            (root/'bundle.json').write_text(json.dumps(manifest))
+            nested=subprocess.run([sys.executable,str(reproduce),str(root),str(root/'new')],capture_output=True,text=True)
+            self.assertNotEqual(nested.returncode,0)
+            self.assertIn('outside the source bundle',nested.stderr)
+            (root/paths['image']).write_bytes(b'changed')
+            corrupted=subprocess.run([sys.executable,str(reproduce),str(root),str(Path(tmp)/'new')],capture_output=True,text=True)
+            self.assertNotEqual(corrupted.returncode,0)
+            self.assertIn('hash mismatch',corrupted.stderr)
+
+    def test_portable_inputs_and_raster_replay_through_run_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)/'run';rec=self.fixture(root)
+            (root/'inputs').mkdir()
+            (root/'inputs/input.jpg').write_bytes(b'portable image')
+            rec['inputs']['image']={'path':'inputs/input.jpg','sha256':hashlib.sha256(b'portable image').hexdigest()}
+            (root/'raster_replay/depth').mkdir(parents=True)
+            (root/'raster_replay/instance_id').mkdir()
+            for channel in ('depth','instance_id'):
+                name=f'raster_replay/{channel}/0000.png'
+                (root/name).write_bytes((root/channel/'0000.png').read_bytes())
+                rec['outputs'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
+            rec['raster_replay']={'depth_dir':'raster_replay/depth','instance_id_dir':'raster_replay/instance_id'}
+            rec['stages']['raster_replay']={'inputs':{},'outputs':{name:value for name,value in rec['outputs'].items() if name.startswith('raster_replay/')}}
+            for name in ('scene.json','heightmap.npz','obstacles.npz','fitted_car.obj','trajectory.json'):
+                rec['stages']['raster_replay']['inputs'][name]=rec['outputs'].get(name)
+            (root/'run.json').write_text(json.dumps(rec))
+            good=json.loads(self.invoke(root).stdout)
+            self.assertTrue(good['checks']['raster_depth_replay_bytes'])
+            self.assertTrue(good['checks']['raster_instance_id_replay_bytes'])
+            (root/'raster_replay/depth/0000.png').write_bytes(b'changed')
+            bad=json.loads(self.invoke(root).stdout)
+            self.assertFalse(bad['checks']['raster_depth_replay_bytes'])
+            self.assertEqual(bad['metrics']['raster_depth_replay_mismatched_frames'],[0])
+
     def fixture(self,root):
         root.mkdir(exist_ok=True)
         (root/'depth').mkdir();(root/'instance_id').mkdir()

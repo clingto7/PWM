@@ -27,7 +27,7 @@ def disk_quat(normal):
     return q[[3,0,1,2]].tolist()
 
 
-def render(root):
+def render(root, replay=False):
     if not torch.cuda.is_available():
         raise RuntimeError('geometric gsplat rendering requires CUDA')
     record=json.loads((root/'run.json').read_text())
@@ -94,7 +94,9 @@ def render(root):
     k=np.asarray(scene['camera']['intrinsics'],dtype=np.float32)
     view_gpu=to_gpu(view)[None];k_gpu=to_gpu(k)[None]
     width,height=504,280
-    depth_dir=root/'gaussian_depth';ids_dir=root/'gaussian_instance_id';mix_dir=root/'gaussian_edge_mixing'
+    base=root/'gaussian_replay' if replay else root
+    if replay: base.mkdir(exist_ok=False)
+    depth_dir=base/('depth' if replay else 'gaussian_depth');ids_dir=base/('instance_id' if replay else 'gaussian_instance_id');mix_dir=base/('edge_mixing' if replay else 'gaussian_edge_mixing')
     for directory in (depth_dir,ids_dir,mix_dir): directory.mkdir(exist_ok=False)
     frame_times=[]
     for frame in range(int(record['parameters']['seconds']*record['parameters']['video_fps'])):
@@ -130,6 +132,19 @@ def render(root):
         Image.fromarray(mixed).save(mix_dir/f'{frame:04d}.png')
     produced={str(path.relative_to(root)):hashlib.sha256(path.read_bytes()).hexdigest() for directory in (depth_dir,ids_dir,mix_dir) for path in sorted(directory.glob('*.png'))}
     record['outputs'].update(produced)
+    if replay:
+        differences=[]
+        for frame in range(len(frame_times)):
+            name=f'{frame:04d}.png'
+            old_id=np.asarray(Image.open(root/'gaussian_instance_id'/name))
+            new_id=np.asarray(Image.open(ids_dir/name))
+            old_depth=np.asarray(Image.open(root/'gaussian_depth'/name)).astype(np.int32)
+            new_depth=np.asarray(Image.open(depth_dir/name)).astype(np.int32)
+            differences.append({'frame':frame,'id_changed_pixels':int(np.count_nonzero(old_id!=new_id)),'depth_max_difference_mm':int(np.max(np.abs(old_depth-new_depth))),'depth_mean_difference_mm':float(np.mean(np.abs(old_depth-new_depth)))})
+        record['gaussian_replay']={'trajectory':'trajectory.json','camera':'scene.json','frames':differences,'tolerance':None,'result':'unmet: no accepted Gaussian replay tolerance'}
+        record['stages']['gaussian_replay']={'inputs':{name:record['outputs'][name] for name in ('scene.json','heightmap.npz','obstacles.npz','fitted_car.obj','trajectory.json')},'outputs':produced,'parameters':{'camera':'original fixed DA3','tolerance':None},'seconds':sum(frame_times)}
+        (root/'run.json').write_text(json.dumps(record,indent=2,sort_keys=True)+'\n')
+        return
     record['gaussian']={'image_size_wh':[width,height],'camera':'scene.json original fixed DA3','sampling':{'method':'one disk per valid ground quad; five box-face disks per obstacle cell; area-weighted car triangle barycentric disks','seed':42,'ground_xy_sigma_cell_fraction':.68,'obstacle_face_sigma_fraction':.68,'car_disk_sigma_m':float(car_scales[0,0]),'opacity':.98,'no_optimization':True},'entity_counts':counts,'frame_times_s':frame_times,'raster_frame_times_s':record['raster_frame_times_s'],'alpha_threshold':alpha_threshold,'feature_method':'chunked one-hot RGB+ED, argmax; all entities occlude each pass','depth_method':'gsplat expected optical z depth (ED); zero on uncovered pixels','fallback':'none; accepted #7 confirms gsplat 1.5.3 RGB+ED and four features','edge_mixing_rule':'second one-hot score >= 25% of highest and > 0.02'}
     record['versions']['gsplat']=version('gsplat');record['versions']['torch']=torch.__version__
     record['timings_s']['gaussian_render']=sum(frame_times)
@@ -140,4 +155,6 @@ def render(root):
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('run_dir',type=Path)
-    render(parser.parse_args().run_dir.resolve())
+    root=parser.parse_args().run_dir.resolve()
+    render(root)
+    render(root, replay=True)

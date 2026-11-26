@@ -24,6 +24,11 @@ def check(root):
         integrity[name]=path.is_relative_to(root) and path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest()==expected
     for name,entry in record['inputs'].items():
         path=Path(entry['path'])
+        if not path.is_absolute():
+            path=(root/path).resolve()
+            if not path.is_relative_to(root):
+                integrity['input:'+name]=False
+                continue
         integrity['input:'+name]=path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest()==entry['sha256']
     for stage in record.get('stages',{}).values():
         for name,expected in stage['outputs'].items():
@@ -234,6 +239,24 @@ def check(root):
             cases[name]={'checks':case_checks,'metrics':case_metrics,'passed':all(value is True or (isinstance(value,str) and value=='不适用') for value in case_checks.values())}
         checks['impulse_cases']=all(case['passed'] for case in cases.values())
         metrics['impulse_cases']=cases
+    if 'bundle.json' in record.get('outputs',{}):
+        checks['raster_replay_required']='raster_replay' in record
+        if 'gaussian' in record.get('required_renderers',[]):
+            checks['gaussian_replay_required']='gaussian_replay' in record
+    if 'raster_replay' in record:
+        replay_record=record['raster_replay']
+        frames=int(params['seconds']*params['video_fps'])
+        for channel in ('depth','instance_id'):
+            matches=[]
+            for frame in range(frames):
+                name=f'{frame:04d}.png'
+                original=root/channel/name
+                again=root/replay_record[channel+'_dir']/name
+                matches.append(original.is_file() and again.is_file() and original.read_bytes()==again.read_bytes())
+            checks['raster_'+channel+'_replay_bytes']=all(matches)
+            metrics['raster_'+channel+'_replay_mismatched_frames']=[i for i,ok in enumerate(matches) if not ok]
+        stage=record.get('stages',{}).get('raster_replay',{})
+        checks['raster_replay_stage']=all(stage.get('inputs',{}).get(name)==record['outputs'].get(name) for name in ('scene.json','heightmap.npz','obstacles.npz','fitted_car.obj','trajectory.json')) and all(stage.get('outputs',{}).get(name)==record['outputs'].get(name) for name in record['outputs'] if name.startswith('raster_replay/'))
     gaussian_required='gaussian' in record.get('required_renderers',[])
     if gaussian_required and 'gaussian' not in record:
         checks['gaussian_required']=False
@@ -278,6 +301,24 @@ def check(root):
         stage=record.get('stages',{}).get('gaussian_render',{})
         checks['gaussian_stage_provenance']=bool(stage) and all(stage.get('inputs',{}).get(name)==record['outputs'].get(name) and name in record['outputs'] for name in ('scene.json','heightmap.npz','obstacles.npz','fitted_car.obj','trajectory.json')) and all(stage.get('outputs',{}).get(name)==record['outputs'].get(name) for directory in ('gaussian_depth','gaussian_instance_id','gaussian_edge_mixing') for name in (f'{directory}/{frame:04d}.png' for frame in range(frames)))
         metrics['gaussian_comparison']={'iou_by_id':iou,'depth_mae_m_on_overlap':depth_error_sum/depth_error_count if depth_error_count else None,'depth_max_error_m_on_overlap':depth_error_max if depth_error_count else None,'depth_overlap_pixels':depth_error_count,'crack_pixels':cracks,'crack_fraction_of_raster_foreground':cracks/raster_foreground if raster_foreground else None,'edge_mixing_pixels':edge_mix,'edge_mixing_fraction_of_gaussian_foreground':edge_mix/gaussian_foreground if gaussian_foreground else None,'raster_mean_frame_s':sum(raster_timings)/len(raster_timings) if raster_timings else None,'gaussian_mean_frame_s':sum(timings)/len(timings) if timings else None,'entity_gaussian_counts':counts,'depth_method':gaussian.get('depth_method'),'feature_method':gaussian.get('feature_method'),'fallback':gaussian.get('fallback')}
+    if 'gaussian_replay' in record:
+        from PIL import Image
+        import numpy as np
+        measured=[]
+        for frame in range(int(params['seconds']*params['video_fps'])):
+            name=f'{frame:04d}.png'
+            old_id=np.asarray(Image.open(root/'gaussian_instance_id'/name))
+            new_id=np.asarray(Image.open(root/'gaussian_replay/instance_id'/name))
+            old_depth=np.asarray(Image.open(root/'gaussian_depth'/name)).astype(np.int32)
+            new_depth=np.asarray(Image.open(root/'gaussian_replay/depth'/name)).astype(np.int32)
+            measured.append({'frame':frame,'id_changed_pixels':int(np.count_nonzero(old_id!=new_id)),
+                             'depth_max_difference_mm':int(np.max(np.abs(old_depth-new_depth))),
+                             'depth_mean_difference_mm':float(np.mean(np.abs(old_depth-new_depth)))})
+        comparison=record['gaussian_replay']
+        checks['gaussian_replay_measurements']=comparison['frames']==measured
+        tolerance=comparison.get('tolerance')
+        checks['gaussian_replay_disposition']=(tolerance is None and comparison.get('result','').startswith('unmet:')) or (tolerance is not None and all(row['id_changed_pixels']<=tolerance['id_changed_pixels'] and row['depth_max_difference_mm']<=tolerance['depth_max_difference_mm'] for row in measured))
+        metrics['gaussian_replay']=comparison
     return {'passed':all(value is True for value in checks.values()),'checks':checks,'metrics':metrics,'limits':{**limits,'baseline_initial_mask_iou':BASELINE_INITIAL_MASK_IOU},'integrity':integrity}
 
 

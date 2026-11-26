@@ -21,3 +21,13 @@ date: 2026-11-24
 - 对照指标：深度误差、实例掩码 IoU、光流误差、每帧耗时。容差等测量后定。
 - 待确认：gsplat 能否直接输出深度和任意数量的附加通道。本次讨论没能核对到原始文档，采用这条画法时第一个确认。
 - 这个对照同时回答 proposal 没有论证的问题：为什么用高斯渲染而不用光栅化。
+
+## Accepted addendum (2026-11-26): first-round main renderer
+
+Rasterization is the first-round main renderer and exact reference for depth and
+instance IDs. Fixed geometric Gaussians with gsplat remain an optional measured
+comparison. Raster depth and ID PNGs retain their actual 16-bit values; color
+palettes are used only for preview videos. The comparison can inform a later
+renderer decision without changing the first-round acceptance path. The
+negative car-size plausibility result remains visible in the run record and
+conclusion; choosing rasterization does not repair that reconstruction limit.

@@ -103,3 +103,57 @@ Current limitations: only trusted near-road pixels contribute local ground heigh
 Issue #9 A800 evidence on published `98a27b7`: at 3 s the checker failed only the inherited final-speed gate (0.00228612 m/s versus 0.001 m/s); at 5 s it passed all checks, with 150 frames and final speed 0.000359783 m/s. The default duration is therefore 5 s, with the original gate retained. Initial car mask IoU was 0.831735; ground RMS 0.007185 m, penetration 0.004373 m, resting-height error 0.001524 m, and energy gain 0.00007393 J/kg. Replay was identical, obstacle IDs 3–6 were visible, and the road false-positive count was 0/52.
 
 The size plausibility check remains **false**: the fitted mesh is [1.149, 2.330, 0.898] m, versus BMW's [1.727, 3.876, 1.415] m, or 0.665/0.601/0.635 of the reference dimensions. DA3's median car-body depth is 3.037 m and the mask-bottom ground ray meets the plane at 3.106 m. These depth and silhouette constraints yield the smaller scale; the data do not establish whether depth scale, camera/ground geometry, or generated shape proportions dominate the discrepancy. The fit continues to use image evidence only, and the failed reasonableness result stays in the chain record for review.
+
+## Portable runs and renderer decision
+
+ADR-0009's accepted addendum makes rasterization the first-round main renderer.
+`--render-gaussians` enables optional measured gsplat comparison. The `depth/`
+and `instance_id/` PNGs are 16-bit measurements; MP4 palette and contrast
+mapping are preview-only. The fitted car-size plausibility check remains
+negative in the existing evidence and is reported separately.
+
+A new run copies the four source inputs into `inputs/` and writes `bundle.json`
+with their paths, all CLI parameters and the local code revision. To use a
+custom bundle, pass `--bundle /path/to/bundle` to `run.py`; its `bundle.json`
+must map `image`, `da3`, `sam_car` and `hunyuan_mesh` to files within that
+bundle. To reproduce on a machine with that exact code revision and the pinned
+first-image environment (including ffmpeg), copy only the run directory and run:
+
+```sh
+python experiments/skeleton/reproduce.py /path/to/copied-run /path/to/new-run
+python experiments/skeleton/check.py /path/to/new-run
+```
+
+The original input paths are unnecessary. The checker still accepts historical
+runs whose input entries contain absolute paths. New runs contain separate
+`raster_replay/depth/` and `raster_replay/instance_id/` PNGs rendered from the
+saved trajectory with the same fixed camera; the checker compares PNG bytes
+frame by frame. Gaussian replay, when enabled, records measured differences
+rather than claiming bitwise determinism.
+
+## Module interfaces
+
+`scene.reconstruct(inputs, args, output, start)` consumes the four bundled
+inputs and run settings, writes the explicit `SceneArtifacts` set, and returns
+prepared `SceneBuild` geometry for the current process. `artifacts.SceneArtifacts.load()` rebuilds collision and visual geometry from
+portable files without the original model inputs. `SceneArtifacts` validates
+the saved set: `scene.json`, `heightmap.npz`,
+`obstacles.npz`, `fitted_car.obj`, and `car_collision_hull.obj`.
+`physics.PyBulletSolver.create_world(scene_build, settings, output)` creates
+the static collision world and vehicle; `solve(body, obstacle_body_ids,
+delta_velocity, seconds)` returns states, maximum penetration, and obstacle
+contact counts. A replacement solver implements these two operations. `raster.RasterRenderer.render(trajectory,
+depth_dir, instance_id_dir, preview_writers=None)` writes 16-bit proxy frames
+from a fixed camera. `run.py` selects `RasterRenderer` unconditionally as the
+mainline adapter and invokes gsplat only with `--render-gaussians`.
+
+To re-render only the saved scene and trajectory (without reconstruction or
+simulation), use:
+
+```sh
+python experiments/skeleton/raster_replay.py /path/to/run /path/to/empty-replay-output
+```
+
+`run.py` uses this same saved-artifact path for its separate raster replay.
+Bundle source hashes are checked before reproduction, and reproduction output
+must be outside the source bundle.

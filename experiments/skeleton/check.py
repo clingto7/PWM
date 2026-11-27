@@ -69,13 +69,37 @@ def check(root):
         return {'passed': False, 'checks': {'hashes': False, 'trajectory_present': False}, 'integrity': integrity}
     final=trajectory[-1]
     surface=ground['flat_world_z_m']
-    resting_error=abs(final[2]-box['size_m'][2]/2-surface)
+    hull_clearance=None
+    support_heights=None
+    if (root/'car_collision_hull.obj').is_file() and (root/'heightmap.npz').is_file():
+        import numpy as np
+        from rest_support import load_obj_vertices, hull_support_clearance
+        hull_vertices=load_obj_vertices(root/'car_collision_hull.obj')
+        with np.load(root/'heightmap.npz') as saved_support:
+            support_heights=(saved_support['ground_z_exact_m'] if 'ground_z_exact_m' in saved_support
+                             else saved_support['ground_z_m'] if 'ground_z_m' in saved_support else None)
+            support_valid=(saved_support['traversable'].astype(bool) if 'traversable' in saved_support
+                           else saved_support['valid'].astype(bool) if 'valid' in saved_support else None)
+        if support_heights is not None and support_valid is not None:
+            def clearance(row):
+                return hull_support_clearance(row,hull_vertices,support_heights,support_valid,ground['cell_m'])
+            hull_clearance=clearance(final)
+    if hull_clearance is None and support_heights is None:
+        flat_surface=surface
+        def clearance(row):
+            return row[2]-box['size_m'][2]/2-flat_surface
+        hull_clearance=clearance(final)
+    resting_error=abs(hull_clearance) if hull_clearance is not None else math.inf
     final_speed=math.sqrt(sum(v*v for v in final[7:10]))
     # Independent check: kinetic + gravitational energy after impulse.
     # Row zero is stationary before the impulse; exclude the intended energy jump.
     energies=[.5*sum(v*v for v in row[7:10])+9.81*row[2] for row in trajectory[1:]]
     max_gain=max(0,max(v-u for u,v in zip(energies,energies[1:])))
-    metrics={'max_penetration_m':m['max_contact_penetration_m'],'final_resting_height_error_m':resting_error,'final_speed_m_s':final_speed,'max_step_specific_energy_gain_j_kg':max_gain,'replay_trajectory_identical':trajectory==replay,'ground_fit_rms_m':ground['rms_m'],'camera_height_m':ground['height_m'],'camera_pitch_deg':ground['pitch_deg'],'sector_radius_m':params['radius_m'],'sector_angle_deg':params['angle_deg'],'initial_projection_bbox_xyxy':bbox(rendered),'initial_projection_mask_iou':projection_iou}
+    contact_fit=ground.get('contact_fit')
+    fit_rms=(contact_fit['rms_m'] if contact_fit and contact_fit.get('sample_count',0)>=100
+             and contact_fit.get('coverage_fraction',0)>=.05 and contact_fit.get('radius_m')==2.0
+             else ground['rms_m'] if contact_fit is None else math.inf)
+    metrics={'contact_fit_rms_m':contact_fit['rms_m'] if contact_fit else None,'contact_fit_coverage_fraction':contact_fit['coverage_fraction'] if contact_fit else None,'max_penetration_m':m['max_contact_penetration_m'],'final_resting_height_error_m':resting_error,'final_hull_support_clearance_m':hull_clearance,'final_speed_m_s':final_speed,'max_step_specific_energy_gain_j_kg':max_gain,'replay_trajectory_identical':trajectory==replay,'ground_fit_rms_m':ground['rms_m'],'camera_height_m':ground['height_m'],'camera_pitch_deg':ground['pitch_deg'],'sector_radius_m':params['radius_m'],'sector_angle_deg':params['angle_deg'],'initial_projection_bbox_xyxy':bbox(rendered),'initial_projection_mask_iou':projection_iou}
     def gate(value, limit):
         return '未设' if limit is None else value <= limit
     limits=THRESHOLDS.copy()
@@ -85,7 +109,7 @@ def check(root):
             'resting_height':gate(resting_error,limits['resting_height_error_m']),
             'final_speed':gate(final_speed,limits['final_speed_m_s']),
             'no_energy_gain':gate(max_gain,limits['energy_gain_j_kg']),
-            'ground_fit':gate(ground['rms_m'],limits['ground_fit_rms_m']),
+            'ground_fit':gate(fit_rms,limits['ground_fit_rms_m']),
             'replay':trajectory==replay,
             'initial_projection_improved': projection_iou > BASELINE_INITIAL_MASK_IOU,
             'initial_projection_record': projection['frame']=='instance_id/0000.png' and bbox(reference)==projection['reference_bbox_xyxy'] and bbox(rendered)==projection['rendered_bbox_xyxy']==m['initial_projection_bbox_xyxy'] and len(reference&rendered)==projection['intersection_pixels'] and union==projection['union_pixels'] and abs(projection_iou-projection['mask_iou'])<1e-12 and abs(projection_iou-m['initial_projection_mask_iou'])<1e-12,
@@ -202,12 +226,12 @@ def check(root):
                          'sleep_record':scene.get('physics_sleep')=={'car_activation_state':'enable_sleeping','activation_state_value':1} and params.get('car_sleep_activation_state')=='enable_sleeping',
                          'initial_stationary':rows[0][:3]==box['initial_position_m'] and all(abs(v)<1e-12 for v in rows[0][7:13]),
                          'penetration':penetration<=limits['penetration_m'],
-                         'final_rest':end_linear_speed<=limits['final_speed_m_s'] and abs(last[2]-box['size_m'][2]/2-ground['flat_world_z_m'])<=limits['resting_height_error_m'],
+                         'final_rest':end_linear_speed<=limits['final_speed_m_s'] and (clearance(last) is not None and abs(clearance(last))<=limits['resting_height_error_m']),
                          'final_angular_rest':gate(end_angular_speed,limits['final_angular_speed_rad_s']),
                          'inertia_record':inertia is not None and len(inertia)==3 and all(v>0 for v in inertia),
                          'no_energy_gain':gain<=limits['energy_gain_j_kg'] and inertia is not None,
                          'replay':rows==again}
-            case_metrics={'max_penetration_m':penetration,'final_speed_m_s':end_linear_speed,'final_angular_speed_rad_s':end_angular_speed,'max_angular_speed_rad_s':max_angular_speed,'max_step_specific_energy_gain_j_kg':gain}
+            case_metrics={'final_hull_support_clearance_m':clearance(last),'max_penetration_m':penetration,'final_speed_m_s':end_linear_speed,'final_angular_speed_rad_s':end_angular_speed,'max_angular_speed_rad_s':max_angular_speed,'max_step_specific_energy_gain_j_kg':gain}
             if name=='coast':
                 effective_mu=params.get('effective_ground_car_friction',params['friction']**2)
                 expected=speed**2/(2*effective_mu*9.81) if effective_mu else math.inf

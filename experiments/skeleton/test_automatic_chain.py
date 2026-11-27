@@ -117,3 +117,59 @@ class ObservationReplayTest(unittest.TestCase):
             import hashlib
             self.assertEqual(depth_meta['files']['prediction.npz']['sha256'], hashlib.sha256(b'depth').hexdigest())
             self.assertEqual(json.loads((root/'new/chain.json').read_text())['failure']['stage'], 'observation')
+
+class FixedUpstreamComparisonTest(unittest.TestCase):
+    def test_paired_manifest_records_identical_inputs_and_timings(self):
+        from unittest.mock import patch
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('automatic_chain', CLI)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            saved = root/'saved'
+            (saved/'proxy').mkdir(parents=True)
+            upstream = {'scene.json': 'same-hash', 'trajectory.json': 'same-trajectory'}
+            baseline = {'status': 'complete', 'renderer': 'raster', 'inputs': upstream,
+                        'inputs_after': upstream, 'seconds': 2, 'diagnostics': {'depth': 'available'},
+                        'views': {'source': {'frame_times_s': [1]}}}
+            (saved/'proxy/render.json').write_text(json.dumps(baseline))
+            (saved/'chain.json').write_text('{}')
+            def render(command):
+                out = Path(command[2]); out.mkdir(parents=True)
+                alternate = {**baseline, 'renderer': 'gaussian', 'seconds': 3}
+                (out/'render.json').write_text(json.dumps(alternate))
+            with patch.object(module, 'check', return_value={'status': 'complete'}), \
+                 patch.object(module, 'invoke', side_effect=render):
+                result = module.compare(saved, root/'comparison', 'gaussian')
+            self.assertEqual(result['status'], 'complete')
+            self.assertEqual(result['upstream_sha256'], upstream)
+            self.assertEqual(result['renderers']['raster']['seconds'], 2)
+            self.assertEqual(result['renderers']['gaussian']['seconds'], 3)
+            self.assertEqual(result['renderers']['raster']['root'], 'source_chain')
+            self.assertEqual(result['renderers']['raster']['manifest'], 'proxy/render.json')
+            self.assertEqual(result['renderers']['gaussian']['root'], 'comparison')
+            self.assertTrue((root/'comparison/comparison.json').is_file())
+
+    def test_upstream_mismatch_fails_comparison(self):
+        from unittest.mock import patch
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('automatic_chain', CLI)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); saved = root/'saved'
+            (saved/'proxy').mkdir(parents=True)
+            (saved/'proxy/render.json').write_text(json.dumps({'status': 'complete',
+                'renderer': 'raster', 'inputs': {'scene.json': 'a'},
+                'inputs_after': {'scene.json': 'a'}}))
+            def render(command):
+                out = Path(command[2]); out.mkdir(parents=True)
+                (out/'render.json').write_text(json.dumps({'status': 'complete',
+                    'renderer': 'gaussian', 'inputs': {'scene.json': 'b'},
+                    'inputs_after': {'scene.json': 'b'}}))
+            with patch.object(module, 'check', return_value={'status': 'complete'}), \
+                 patch.object(module, 'invoke', side_effect=render):
+                with self.assertRaisesRegex(ValueError, 'upstream'):
+                    module.compare(saved, root/'comparison', 'gaussian')
+            self.assertEqual(json.loads((root/'comparison/comparison.json').read_text())['status'], 'failed')

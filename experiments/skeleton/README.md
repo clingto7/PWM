@@ -288,3 +288,17 @@ the SHA-256 of canonical sorted compact JSON without that field, and pin that
 digest in dataset `freeze_sha256`. The holdout scorer rejects an altered seal,
 revision/config mismatch, or image/annotation mismatch. Commit the seal and
 dataset pin before holdout inspection.
+
+For an opt-in fixed-upstream renderer comparison, run:
+
+```sh
+python experiments/skeleton/automatic_chain.py compare RUN_DIR COMPARE_DIR --alternate-renderer gaussian
+```
+
+The command checks the saved chain, renders the alternate proxy from the same
+saved scene and trajectory, and writes `comparison.json` with both adapter
+manifest hashes, exact matching upstream SHA-256 maps, timings, views and
+available diagnostics. A mismatch or renderer failure leaves a diagnostic
+failure manifest. The normal original-image run renders only the selected
+renderer. Gaussian comparison requires the pinned GPU environment; no
+cross-game or A800 Gaussian result is asserted here.

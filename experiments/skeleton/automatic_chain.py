@@ -197,6 +197,51 @@ def check(root):
             'integrity': integrity, 'semantic_check': semantic, 'timings_s': manifest['timings_s']}
 
 
+
+def compare(saved, output, alternate):
+    saved, output = saved.resolve(), output.resolve()
+    if output == saved or output in saved.parents or saved in output.parents:
+        raise ValueError('comparison output must be separate from saved chain')
+    if output.exists() and any(output.iterdir()):
+        raise ValueError('comparison output is not empty')
+    output.mkdir(parents=True, exist_ok=True)
+    result = {'schema': 1, 'status': 'failed',
+              'alternate_renderer': alternate,
+              'artifact_roots': {'source_chain': 'caller-supplied saved chain',
+                                 'comparison': 'directory containing comparison.json'}}
+    try:
+        if check(saved)['status'] != 'complete':
+            raise ValueError('saved chain failed read-only check')
+        baseline_path = saved/'proxy/render.json'
+        baseline = json.loads(baseline_path.read_text())
+        if baseline.get('status') != 'complete' or baseline.get('renderer') == alternate:
+            raise ValueError('alternate renderer must differ from completed baseline')
+        if baseline.get('inputs') != baseline.get('inputs_after'):
+            raise ValueError('baseline upstream changed during rendering')
+        invoke([Path(__file__).with_name('render_adapters.py'), saved/'automatic/run',
+                output/'alternate', '--renderer', alternate])
+        alternate_path = output/'alternate/render.json'
+        other = json.loads(alternate_path.read_text())
+        if other.get('status') != 'complete' or other.get('renderer') != alternate:
+            raise ValueError('alternate renderer did not complete')
+        if baseline['inputs'] != other.get('inputs') or other.get('inputs') != other.get('inputs_after'):
+            raise ValueError('fixed upstream SHA mismatch between renderers')
+        result['source_chain_sha256'] = digest(saved/'chain.json')
+        result['upstream_sha256'] = baseline['inputs']
+        result['renderers'] = {
+            row['renderer']: {'root': root_name, 'manifest': path, 'manifest_sha256': digest(file),
+                              'seconds': row.get('seconds'), 'diagnostics': row.get('diagnostics'),
+                              'views': row.get('views'), 'outputs': row.get('outputs')}
+            for row, root_name, path, file in ((baseline, 'source_chain', 'proxy/render.json', baseline_path),
+                                               (other, 'comparison', 'alternate/render.json', alternate_path))}
+        result['status'] = 'complete'
+        return result
+    except Exception as exc:
+        result['failure'] = {'type': type(exc).__name__, 'reason': str(exc)}
+        raise
+    finally:
+        write(output/'comparison.json', result)
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
@@ -207,6 +252,10 @@ def main():
     create.add_argument('--resume-observation', type=Path)
     verify = sub.add_parser('check')
     verify.add_argument('output', type=Path)
+    paired = sub.add_parser('compare')
+    paired.add_argument('saved', type=Path)
+    paired.add_argument('output', type=Path)
+    paired.add_argument('--alternate-renderer', choices=('raster', 'gaussian'), required=True)
     replay = sub.add_parser('replay')
     replay.add_argument('saved', type=Path)
     replay.add_argument('output', type=Path)
@@ -219,6 +268,10 @@ def main():
         raise SystemExit(0 if result['status'] == 'complete' else 1)
     if args.command == 'run':
         run(args.image, args.config, args.output, args.resume_observation)
+        return
+    if args.command == 'compare':
+        result = compare(args.saved, args.output, args.alternate_renderer)
+        print(json.dumps(result, sort_keys=True))
         return
     source = args.saved.resolve()
     checked = check(source)

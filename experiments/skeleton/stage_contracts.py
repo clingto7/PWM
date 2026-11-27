@@ -25,7 +25,7 @@ def _paths(root, names):
     return result
 
 
-def record(root, stage, inputs, outputs, implementation, version, parameters, seconds):
+def record(root, stage, inputs, outputs, implementation, version, parameters, seconds, *, timing=None):
     root = Path(root).resolve()
     if not outputs:
         raise ValueError('stage requires an output')
@@ -35,6 +35,8 @@ def record(root, stage, inputs, outputs, implementation, version, parameters, se
                 'implementation': implementation, 'version': version,
                 'parameters': parameters, 'inputs': _paths(root, inputs),
                 'outputs': _paths(root, outputs), 'seconds': seconds}
+    if timing is not None:
+        manifest['timing'] = timing
     target = root/'stages'/f'{stage}.json'
     target.parent.mkdir(exist_ok=True)
     target.write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')

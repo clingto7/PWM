@@ -30,8 +30,12 @@ def depth_live(image, destination, weights):
         raise ValueError('DA3 local weights required; no model download is permitted')
     import numpy as np
     from depth_anything_3.api import DepthAnything3
+    load_started = time.perf_counter()
     model = DepthAnything3.from_pretrained(str(weights)).to('cuda').eval()
+    load_seconds = time.perf_counter()-load_started
+    inference_started = time.perf_counter()
     prediction = model.inference([str(image)], infer_gs=False, process_res=504)
+    inference_seconds = time.perf_counter()-inference_started
     arrays = {'depth': np.asarray(prediction.depth)}
     for name in ('conf', 'sky', 'intrinsics', 'extrinsics', 'processed_images'):
         value = getattr(prediction, name, None)
@@ -39,7 +43,8 @@ def depth_live(image, destination, weights):
             arrays[name] = np.asarray(value)
     np.savez_compressed(destination/'prediction.npz', **arrays)
     return {'model': 'depth-anything/DA3NESTED-GIANT-LARGE-1.1',
-            'is_metric': bool(prediction.is_metric), 'weight_sha256': digest(weights/'model.safetensors')}
+            'is_metric': bool(prediction.is_metric), 'weight_sha256': digest(weights/'model.safetensors'),
+            'timing_s': {'load': load_seconds, 'inference': inference_seconds}}
 
 
 def segmentation_live(image_path, destination, weights):
@@ -57,9 +62,13 @@ def segmentation_live(image_path, destination, weights):
     points = np.array([(x*width,y*height) for y in np.linspace(.04,.96,9)
                        for x in np.linspace(.04,.96,16)], dtype=np.float32)
     prompts = torch.from_numpy(points*np.array([1024/width,1024/height], dtype=np.float32)).cuda()[None,:,None]
+    load_started = time.perf_counter()
     model = Sam2Model.from_pretrained(weights, local_files_only=True).cuda().eval()
+    load_seconds = time.perf_counter()-load_started
+    inference_started = time.perf_counter()
     with torch.inference_mode():
         result = model(pixel_values=pixels, input_points=prompts, multimask_output=True)
+    inference_seconds = time.perf_counter()-inference_started
     scores_all = result.iou_scores[0].float().cpu().numpy()
     best = scores_all.argmax(axis=1)
     scores = scores_all[np.arange(len(points)), best]
@@ -75,7 +84,8 @@ def segmentation_live(image_path, destination, weights):
     np.savez_compressed(destination/'sam2_masks.npz', masks_256=masks, points_xy=points,
                         scores=scores, selected=np.array(selected, dtype=int))
     return {'model':'facebook/sam2.1-hiera-large', 'weight_sha256':digest(weights/'model.safetensors'),
-            'method':'uniform 16x9 point prompts; best IoU mask; IoU deduplication'}
+            'method':'uniform 16x9 point prompts; best IoU mask; IoU deduplication',
+            'timing_s': {'load': load_seconds, 'inference': inference_seconds}}
 
 
 def select_subject(masks_path, depth_path, image_path, output):
@@ -223,7 +233,9 @@ def build(args):
     if capability['scale']!='metric_m' or not has_camera or not valid_depth:
         raise ValueError('scene requires metric depth and camera intrinsics; see depth_capability.json')
     record(out,'depth',['inputs/input.jpg'],['inputs/prediction.npz','depth_capability.json'],
-           implementation,'1',capability,time.perf_counter()-start)
+           implementation,'1',capability,time.perf_counter()-start,
+           timing={'seconds': metadata.get('timing_s'), 'scope':
+               'saved-source copy/validation' if args.depth_source else 'cold model load and inference'})
     write(out/'stage_status.json', {'stage':'segmentation','status':'running'})
     start=time.perf_counter()
     if args.segmentation_source:
@@ -240,7 +252,9 @@ def build(args):
     select_subject(out/'sam2_masks.npz',out/'inputs/prediction.npz',image,out)
     record(out,'segmentation',['inputs/input.jpg','inputs/prediction.npz'],['sam2_masks.npz','selection.json','raw_selected_mask.png','inputs/car_mask.png'],
            implementation,'1',{'model':metadata.get('model'),'weight_sha256':metadata.get('weight_sha256'),
-                                'method':metadata.get('method')},time.perf_counter()-start)
+                                'method':metadata.get('method')},time.perf_counter()-start,
+           timing={'seconds': metadata.get('timing_s'), 'scope':
+               'saved-source copy/selection' if args.segmentation_source else 'cold model load, inference and selection'})
     record(out,'observation',['inputs/input.jpg'],['inputs/prediction.npz','inputs/car_mask.png',
         'sam2_masks.npz','selection.json','raw_selected_mask.png','depth_capability.json'],
         'DA3 + SAM 2.1 Large','1',

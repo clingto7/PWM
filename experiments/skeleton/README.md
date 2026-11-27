@@ -191,18 +191,27 @@ Scene resume rejects any changed scene geometry or obstacle setting recorded in
 the saved scene contract (for example `--cell` or `--radius`). Physics now writes
 `contacts.json` with a versioned per-case contact and penetration record; the
 physics contract hashes it, and the checker compares it with the run record.
-`first_image_stages.py` owns PyBullet world creation, solves, and raster output;
-`first_image_pipeline.py` coordinates these stage calls and writes provenance.
+`physics.PyBulletSolver` creates and solves the PyBullet world;
+`first_image_stages.py` calls that adapter and the raster renderer, while
+`first_image_pipeline.py` coordinates stage calls and writes provenance.
 # Ticket 16: original-image observation
 
-`observation.py` accepts an original screenshot and emits a checked bundle for
-`first_image_pipeline.py`. With local DA3 Nested and SAM 2.1 Large weights at
+`observation.py` accepts an original screenshot and emits checked depth,
+segmentation, and observation artifacts without requiring a mesh. With local
+DA3 Nested and SAM 2.1 Large weights at
 `experiments/first_image/models/{da3nested,sam21large}`:
 
 ```sh
-python experiments/skeleton/observation.py IMAGE.jpg OBSERVATION_DIR --mesh SAVED_MESH.glb
+python experiments/skeleton/observation.py IMAGE.jpg OBSERVATION_DIR
 python experiments/skeleton/observation.py check OBSERVATION_DIR observation
-python experiments/skeleton/first_image_pipeline.py RUN_DIR --bundle OBSERVATION_DIR
+```
+
+For the current-image downstream proxy, add a saved mesh to create the bundle
+consumed by `first_image_pipeline.py`:
+
+```sh
+python experiments/skeleton/observation.py IMAGE.jpg PROXY_OBSERVATION_DIR --mesh SAVED_MESH.glb
+python experiments/skeleton/first_image_pipeline.py RUN_DIR --bundle PROXY_OBSERVATION_DIR
 ```
 
 `--mesh` supplies a saved mesh only for the current-image downstream proxy;
@@ -213,4 +222,4 @@ be changed independently. The observation saves all SAM candidates and scores
 in `selection.json`, the selected mask, a depth capability declaration, model
 identities, weights hashes, elapsed time, and hash-checked stage records. A
 relative-depth or missing-camera result fails before creating an accepted
-bundle.
+observation.

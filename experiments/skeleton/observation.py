@@ -1,4 +1,4 @@
-"""Original image to checked DA3/SAM 2.1 observation bundle.
+"""Original image to checked DA3/SAM 2.1 observation artifacts.
 
 Saved model outputs permit local replay; omit their source flags for inference with
 local weights. The optional mesh is a downstream compatibility proxy for ticket 16.
@@ -171,21 +171,23 @@ def build(args):
     record(out,'segmentation',['inputs/input.jpg'],['sam2_masks.npz','selection.json','inputs/car_mask.png'],
            implementation,'1',{'model':metadata.get('model'),'weight_sha256':metadata.get('weight_sha256'),
                                 'method':metadata.get('method')},time.perf_counter()-start)
-    if args.mesh:
-        shutil.copyfile(args.mesh,out/'inputs/car_shape.glb')
-    else:
-        raise ValueError('ticket 16 downstream proxy requires --mesh; automatic mesh is ticket 17')
-    write(out/'bundle.json', {'schema':1,'inputs':{'image':'inputs/input.jpg','da3':'inputs/prediction.npz',
-        'sam_car':'inputs/car_mask.png','hunyuan_mesh':'inputs/car_shape.glb'},
-        'source_sha256':{'image':digest(out/'inputs/input.jpg'),'da3':digest(out/'inputs/prediction.npz'),
-        'sam_car':digest(out/'inputs/car_mask.png'),'hunyuan_mesh':digest(out/'inputs/car_shape.glb')}})
     record(out,'observation',['inputs/input.jpg'],['inputs/prediction.npz','inputs/car_mask.png',
-        'inputs/car_shape.glb','selection.json','depth_capability.json','bundle.json'],
-        'DA3 + SAM 2.1 Large + saved mesh proxy','1',
+        'sam2_masks.npz','selection.json','depth_capability.json'],
+        'DA3 + SAM 2.1 Large','1',
         {'depth_stage':'stages/depth.json','segmentation_stage':'stages/segmentation.json'},
         check(out,'depth')['seconds']+check(out,'segmentation')['seconds'])
+    if args.mesh:
+        shutil.copyfile(args.mesh,out/'inputs/car_shape.glb')
+        write(out/'bundle.json', {'schema':1,'inputs':{'image':'inputs/input.jpg','da3':'inputs/prediction.npz',
+            'sam_car':'inputs/car_mask.png','hunyuan_mesh':'inputs/car_shape.glb'},
+            'source_sha256':{'image':digest(out/'inputs/input.jpg'),'da3':digest(out/'inputs/prediction.npz'),
+            'sam_car':digest(out/'inputs/car_mask.png'),'hunyuan_mesh':digest(out/'inputs/car_shape.glb')}})
+        record(out,'downstream_bundle',['inputs/input.jpg','inputs/prediction.npz',
+            'inputs/car_mask.png','selection.json'],['inputs/car_shape.glb','bundle.json'],
+            'saved mesh compatibility proxy','1',{'mesh_sha256':digest(out/'inputs/car_shape.glb')},0.0)
     write(out/'stage_status.json', {'stage':'observation','status':'complete'})
-    print(json.dumps({'bundle':str(out),'selected_index':json.loads((out/'selection.json').read_text())['selected_index']}))
+    print(json.dumps({'observation':str(out),'bundle':str(out) if args.mesh else None,
+                      'selected_index':json.loads((out/'selection.json').read_text())['selected_index']}))
 
 
 def main():

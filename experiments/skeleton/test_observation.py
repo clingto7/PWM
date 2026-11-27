@@ -11,6 +11,21 @@ CLI = Path(__file__).with_name('observation.py')
 
 
 class ObservationCliTest(unittest.TestCase):
+    def test_image_only_produces_checked_observation_without_downstream_bundle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / 'observation'
+            result = subprocess.run([sys.executable, str(CLI), str(ROOT/'first_image/input.jpg'),
+                str(out), '--depth-source', str(ROOT/'first_image/da3nested_output'),
+                '--segmentation-source', str(ROOT/'first_image/sam21large_output')],
+                capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((out/'bundle.json').exists())
+            self.assertFalse((out/'inputs/car_shape.glb').exists())
+            self.assertEqual(json.loads((out/'stage_status.json').read_text())['status'], 'complete')
+            for stage in ('depth', 'segmentation', 'observation'):
+                checked = subprocess.run([sys.executable, str(CLI), 'check', str(out), stage], capture_output=True)
+                self.assertEqual(checked.returncode, 0, checked.stderr)
+
     def test_saved_models_produce_checked_bundle_and_selection_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / 'observation'
@@ -37,6 +52,9 @@ class ObservationCliTest(unittest.TestCase):
                 self.assertEqual(checked.returncode, 0, checked.stderr)
             segmentation = json.loads((out/'stages/segmentation.json').read_text())
             self.assertEqual(segmentation['parameters']['model'], 'facebook/sam2.1-hiera-large')
+            bundle_check = subprocess.run([sys.executable, str(CLI), 'check', str(out),
+                'downstream_bundle'], capture_output=True)
+            self.assertEqual(bundle_check.returncode, 0, bundle_check.stderr)
 
     def test_relative_depth_fails_before_bundle_is_accepted(self):
         with tempfile.TemporaryDirectory() as tmp:

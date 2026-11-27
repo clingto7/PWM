@@ -10,7 +10,6 @@ import time
 from dataclasses import dataclass
 import numpy as np
 from PIL import Image
-import pybullet as p
 from car_fit import fit
 
 
@@ -231,7 +230,7 @@ def reconstruct(inputs, args, out, start):
     width,length,box_h = mesh_fit['size_m']
     car_pos = mesh_fit['position_m']
     yaw = mesh_fit['yaw_rad']
-    car_orientation = p.getQuaternionFromEuler([0,0,yaw])
+    car_orientation = [0.0, 0.0, math.sin(yaw/2), math.cos(yaw/2)]
     mesh_volume = float(fitted_mesh.volume)
     if not math.isfinite(mesh_volume) or mesh_volume <= 0:
         raise ValueError('Hunyuan vehicle mesh has invalid enclosed volume')
@@ -248,6 +247,13 @@ def reconstruct(inputs, args, out, start):
             mesh_indices.extend(q+t for t in (0,2,1,1,2,3,4,5,6,5,7,6,0,1,4,1,5,4,2,6,3,3,6,7,0,4,2,2,4,6,1,3,5,3,7,5))
         obstacle_meshes.append((mesh_vertices,mesh_indices))
     scene = {'camera': {'intrinsics': k.tolist(), 'position_m': [0,0,0], 'forward': camera_forward, 'up': camera_up, 'fixed': True}, 'ground': {'plane_z_ax_by_c': [a,b,c], 'flat_world_z_m': flat_z, 'height_m': height, 'pitch_deg': pitch, 'rms_m': residual, 'sample_count': int(road.sum()), 'cell_m': args.cell, 'grid_size': n, 'heightmap_method': {'near': 'metric DA3 road pixel back-projection, cell mean', 'far': 'camera ray / fitted plane intersection', 'car': 'SAM mask footprint replaced by fitted plane', 'near_depth_m': args.near_depth, 'ground_inlier_m': args.ground_inlier, 'provenance_codes': {'near_depth':1,'ray_plane':2,'car_plane_fill':3}, 'cell_counts': {'near_depth':int(np.count_nonzero(provenance==1)), 'ray_plane':int(np.count_nonzero(provenance==2)), 'car_plane_fill':int(np.count_nonzero(provenance==3))}}}, 'sector': {'radius_m': args.radius, 'angle_deg': args.angle, 'invisible_wall': True}, 'car': {'image_bbox_xyxy': [x0,y0,x1,y1], 'excluded_image_pixels': int(car.sum()), 'footprint_filled_with_plane': True, 'ground_contact_ray': {'pixel_uv': [u_contact,y1], 'plane_intersection_depth_m': car_depth, 'world_xy_m': [anchor_x,anchor_y]}, 'mesh_fit': mesh_fit, 'initial_orientation_xyzw': car_orientation, 'collision_shape': 'convex hull of fitted Hunyuan mesh', 'box_fit': {'method': 'ground-edge anchor and projected bounding-box search', 'reference_bbox_xyxy': target, 'predicted_bbox_xyxy': best[5], 'predicted_bbox_iou': best[0], 'width_from_bbox_at_ground_depth_m': projected_width, 'height_from_bbox_at_ground_depth_m': projected_height}, 'depth_m': car_depth, 'size_m': [width,length,box_h], 'volume_m3': mesh_volume, 'density_kg_m3': args.density, 'mass_kg': mass, 'initial_position_m': car_pos}, 'mesh': {'vertices': len(vertices), 'triangles': len(indices)//3}}
+    scene['entities'] = [{'id': 1, 'role': 'support', 'motion': 'fixed', 'collider': 'heightmap.npz'},
+                         {'id': 2, 'role': 'controlled_subject', 'motion': 'dynamic',
+                          'collider': 'car_collision_hull.obj', 'visual_mesh': 'fitted_car.obj',
+                          'volume_m3': mesh_volume, 'density_kg_m3': args.density, 'mass_kg': mass}] + [
+                         {'id': item['instance_id'], 'role': 'static_entity', 'motion': 'fixed',
+                          'collision_enabled': item['collision_enabled'], 'collider': 'obstacles.npz'}
+                         for item in components]
     scene['obstacles']={'components':components,'component_count':len(components),'detection':{'height_above_plane_m':args.obstacle_height,'min_pixels_per_cell':args.obstacle_min_pixels,'min_cells_per_component':args.obstacle_min_cells,'connectivity':4,'source':'DA3 metric depth outside car mask, including non-road pixels'},'render_only':args.obstacles_render_only,'road_cells':road_count,'road_false_positive_cells':road_false,'road_false_positive_ratio':false_ratio,'car_footprint_obstacle_cells':int(np.count_nonzero(car_grid & (component_ids>0))),'instance_id_file':'obstacles.npz'}
     write_json(out/'scene.json', scene)
     scene_time = time.perf_counter()-grid_start

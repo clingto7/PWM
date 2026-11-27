@@ -11,6 +11,29 @@ CLI = Path(__file__).with_name('subject_mesh.py')
 
 
 class SubjectMeshCliTest(unittest.TestCase):
+    def test_direct_mesh_input_isolates_distant_mask_component(self):
+        import numpy as np
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            mask = np.asarray(Image.open(ROOT/'first_image/car_input/car_mask.png').convert('L')).copy()
+            mask[700:702, 1320:1322] = 255
+            mask[700:702, 1010:1012] = 255
+            raw = root/'raw_mask.png'
+            Image.fromarray(mask).save(raw)
+            out = root/'mesh'
+            result = subprocess.run([sys.executable, str(CLI), str(ROOT/'first_image/input.jpg'),
+                str(raw), str(out), '--saved-mesh',
+                str(ROOT/'first_image/hunyuan21_output/car_shape.glb')], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            crop = json.loads((out/'subject_mesh.json').read_text())['provenance']['crop']
+            self.assertEqual(crop['mask_cleanup']['removed_pixels'], 4)
+            self.assertEqual(crop['mask_cleanup']['removed_components'], 1)
+            self.assertGreaterEqual(crop['mask_cleanup']['retained_components'], 2)
+            self.assertGreaterEqual(crop['mask_cleanup']['clean_bbox_xyxy'][2], 1012)
+            self.assertLess(crop['crop_xyxy'][2]-crop['crop_xyxy'][0], 600)
+            self.assertLess(Image.open(out/'masked_subject.png').getchannel('A').getbbox()[2], 600)
+
     def test_saved_mesh_produces_checked_artifact_and_reuses_it(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)/'mesh'

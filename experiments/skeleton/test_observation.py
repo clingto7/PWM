@@ -11,6 +11,40 @@ CLI = Path(__file__).with_name('observation.py')
 
 
 class ObservationCliTest(unittest.TestCase):
+    def test_distant_selected_mask_island_does_not_expand_mesh_crop(self):
+        import numpy as np
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = ROOT/'first_image/input.jpg'
+            source = root/'sam'
+            source.mkdir()
+            mask = np.asarray(Image.open(ROOT/'first_image/car_input/car_mask.png').convert('L').resize(
+                (256, 256), Image.Resampling.NEAREST)) > 0
+            mask[180, 240] = True
+            np.savez_compressed(source/'sam2_masks.npz', masks_256=mask[None],
+                points_xy=np.array([[128, 180]]), scores=np.array([.99]), selected=np.array([0]))
+            (source/'run.json').write_text(json.dumps({'model': 'synthetic SAM'}))
+            out = root/'observation'
+            result = subprocess.run([sys.executable, str(CLI), str(image), str(out),
+                '--depth-source', str(ROOT/'first_image/da3nested_output'),
+                '--segmentation-source', str(source),
+                '--mesh', str(ROOT/'first_image/hunyuan21_output/car_shape.glb')],
+                capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            evidence = json.loads((out/'selection.json').read_text())
+            cleanup = evidence['cleanup']
+            self.assertGreater(cleanup['removed_pixels'], 0)
+            self.assertEqual(cleanup['removed_components'], 1)
+            self.assertGreater(cleanup['raw_bbox_xyxy'][2], 1300)
+            self.assertLess(cleanup['clean_bbox_xyxy'][2], 1100)
+            crop = json.loads((out/'mesh/subject_mesh.json').read_text())['provenance']['crop']
+            self.assertLess(crop['crop_xyxy'][2] - crop['crop_xyxy'][0], 600)
+            self.assertTrue((out/'raw_selected_mask.png').is_file())
+            for stage in ('segmentation', 'observation', 'downstream_bundle'):
+                checked = subprocess.run([sys.executable, str(CLI), 'check', str(out), stage], capture_output=True)
+                self.assertEqual(checked.returncode, 0, checked.stderr)
+
     def test_missing_image_preserves_original_failure_in_stage_status(self):
         with tempfile.TemporaryDirectory() as tmp:
             missing = Path(tmp)/'missing.jpg'

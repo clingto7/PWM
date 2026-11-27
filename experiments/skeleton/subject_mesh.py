@@ -95,13 +95,14 @@ def geometry(path):
 
 
 def prepare_rgba(image, mask, output):
-    """Preserve the exact selected subject pixels in a padded square local crop."""
+    """Crop the dominant connected subject while retaining mask cleanup evidence."""
     import math
     from PIL import Image
     rgb = Image.open(image).convert('RGB')
     alpha = Image.open(mask).convert('L')
     if alpha.size != rgb.size:
         raise ValueError('selected mask must match original image')
+    alpha, cleanup = isolate_selected_mask(alpha)
     bbox = alpha.getbbox()
     if bbox is None:
         raise ValueError('selected subject mask is empty')
@@ -119,7 +120,68 @@ def prepare_rgba(image, mask, output):
     path = output/'masked_subject.png'
     rgba.save(path)
     return rgba, {'selected_mask_bbox_xyxy': list(bbox), 'crop_xyxy': list(crop),
+                  'mask_cleanup': cleanup,
                   'padding_fraction': .15, 'source_image_size_xy': list(rgb.size)}
+
+
+def isolate_selected_mask(alpha):
+    """Remove tiny distant islands without discarding nearby subject parts."""
+    import numpy as np
+    from PIL import Image
+    foreground = np.asarray(alpha) > 0
+    if not foreground.any():
+        raise ValueError('selected subject mask is empty')
+    height, width = foreground.shape
+    visited = np.zeros_like(foreground)
+    components = []
+    for y, x in np.argwhere(foreground):
+        if visited[y, x]:
+            continue
+        visited[y, x] = True
+        pending = [(int(y), int(x))]
+        pixels = []
+        while pending:
+            cy, cx = pending.pop()
+            pixels.append((cy, cx))
+            for ny in range(max(0, cy-1), min(height, cy+2)):
+                for nx in range(max(0, cx-1), min(width, cx+2)):
+                    if foreground[ny, nx] and not visited[ny, nx]:
+                        visited[ny, nx] = True
+                        pending.append((ny, nx))
+        components.append(pixels)
+    components.sort(key=len, reverse=True)
+    def bounds(pixels):
+        return [min(x for _, x in pixels), min(y for y, _ in pixels),
+                max(x for _, x in pixels)+1, max(y for y, _ in pixels)+1]
+    main_bbox = bounds(components[0])
+    extent = max(main_bbox[2]-main_bbox[0], main_bbox[3]-main_bbox[1])
+    removed = []
+    retained = [components[0]]
+    for part in components[1:]:
+        box = bounds(part)
+        gap_x = max(main_bbox[0]-box[2], box[0]-main_bbox[2], 0)
+        gap_y = max(main_bbox[1]-box[3], box[1]-main_bbox[3], 0)
+        if len(part) <= max(1, len(components[0])//1000) and max(gap_x, gap_y) > extent*.1:
+            removed.append((part, box))
+        else:
+            retained.append(part)
+    cleaned = np.zeros_like(foreground)
+    for part in retained:
+        for y, x in part:
+            cleaned[y, x] = True
+    raw_bbox = alpha.getbbox()
+    cleaned_image = Image.fromarray(np.uint8(cleaned)*255)
+    diagnostics = {'method': 'tiny_distant_component_filter',
+                   'max_removed_fraction_of_largest': .001, 'minimum_gap_fraction_of_largest_extent': .1,
+                   'raw_pixels': int(foreground.sum()), 'retained_pixels': int(cleaned.sum()),
+                   'removed_pixels': int(foreground.sum()-cleaned.sum()),
+                   'component_count': len(components), 'retained_components': len(retained),
+                   'removed_components': len(removed),
+                   'raw_bbox_xyxy': list(raw_bbox), 'clean_bbox_xyxy': list(cleaned_image.getbbox()),
+                   'removed_component_details': [
+                       {'pixels': len(part), 'bbox_xyxy': box} for part, box in removed[:20]],
+                   'omitted_removed_component_details': max(0, len(removed)-20)}
+    return cleaned_image, diagnostics
 
 
 def hunyuan21(image, mask, output, weights):

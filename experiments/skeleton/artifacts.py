@@ -33,7 +33,7 @@ class SceneArtifacts:
         scene=json.loads(paths['scene.json'].read_text())
         with np.load(paths['heightmap.npz']) as heightmap:
             heights=heightmap['ground_z_exact_m'] if 'ground_z_exact_m' in heightmap else heightmap['ground_z_m']
-            valid=heightmap['valid'].astype(bool)
+            valid=heightmap['traversable'].astype(bool) if 'traversable' in heightmap else heightmap['valid'].astype(bool)
             surface=heightmap['surface_z_exact_m'] if 'surface_z_exact_m' in heightmap else heightmap['surface_z_m']
         with np.load(paths['obstacles.npz']) as obstacle_data:
             component_ids=obstacle_data['instance_id']
@@ -63,6 +63,7 @@ class SceneArtifacts:
         hull=trimesh.load(paths['car_collision_hull.obj'],force='mesh',process=False)
         return SimpleNamespace(vertices=vertices,indices=indices,
             components=components,obstacle_meshes=obstacle_meshes,
+            traversable=valid, cell_m=cell, origin_x=origin,
             half_angle=math.radians(scene['sector']['angle_deg']/2),
             flat_z=flat_z,hull=hull,mass=car['mass_kg'],
             car_pos=car['initial_position_m'],

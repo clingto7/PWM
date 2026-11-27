@@ -65,19 +65,32 @@ class PyBulletSolver:
         p.changeDynamics(ground,-1,lateralFriction=args.friction,restitution=0)
         obstacle_bodies={}
         for component,(mesh_vertices,mesh_indices) in zip(components,obstacle_meshes):
-            collision=-1 if args.obstacles_render_only else p.createCollisionShape(p.GEOM_MESH,vertices=mesh_vertices,indices=mesh_indices,flags=p.GEOM_FORCE_CONCAVE_TRIMESH)
+            collision=-1 if not component['collision_enabled'] else p.createCollisionShape(p.GEOM_MESH,vertices=mesh_vertices,indices=mesh_indices,flags=p.GEOM_FORCE_CONCAVE_TRIMESH)
             visual=p.createVisualShape(p.GEOM_MESH,vertices=mesh_vertices,indices=mesh_indices,rgbaColor=[.1,.5,.1,1])
             obstacle_body=p.createMultiBody(0,collision,visual)
             if collision != -1:
                 p.changeDynamics(obstacle_body,-1,lateralFriction=args.friction,restitution=0)
             obstacle_bodies[obstacle_body]=component['instance_id']
         walls = []
-        # Radial arc and two sector edges are collision-only static segments.
+        # Every exposed traversable-cell edge is an invisible collision wall.
         segments = []
-        for t in np.linspace(-half_angle, half_angle, 65)[:-1]:
+        mask=geometry.traversable
+        cell=geometry.cell_m
+        origin=geometry.origin_x
+        for j,i in np.argwhere(mask):
+            x=origin+i*cell; y=j*cell; half=cell/2
+            if j==0 or not mask[j-1,i]: segments.append(((x-half,y-half),(x+half,y-half)))
+            if j==mask.shape[0]-1 or not mask[j+1,i]: segments.append(((x-half,y+half),(x+half,y+half)))
+            if i==0 or not mask[j,i-1]: segments.append(((x-half,y-half),(x-half,y+half)))
+            if i==mask.shape[1]-1 or not mask[j,i+1]: segments.append(((x+half,y-half),(x+half,y+half)))
+        # Retain the sector edge for compatibility with legacy saved scenes.
+        if 'support_evidence' not in geometry.scene:
+            segments = []
+        for t in np.linspace(-half_angle, half_angle, 65)[:-1] if not segments else ():
             t2 = t + 2*half_angle/64
             segments.append(((args.radius*math.sin(t),args.radius*math.cos(t)),(args.radius*math.sin(t2),args.radius*math.cos(t2))))
-        segments += [((0,0),(args.radius*math.sin(t),args.radius*math.cos(t))) for t in (-half_angle,half_angle)]
+        if not segments:
+            segments += [((0,0),(args.radius*math.sin(t),args.radius*math.cos(t))) for t in (-half_angle,half_angle)]
         for (u,v) in segments:
             dx,dy = v[0]-u[0],v[1]-u[1]
             mid = [(u[0]+v[0])/2,(u[1]+v[1])/2,flat_z+.5]
@@ -109,13 +122,14 @@ def solve_saved_scene(out, args, scene, component_ids, tops, actions=None):
         shape_counts={instance_id:len(p.getCollisionShapeData(obstacle_body,-1)) for obstacle_body,instance_id in obstacle_bodies.items()}
         for component in components:
             component['collision_shape_count']=shape_counts[component['instance_id']]
-            if bool(component['collision_shape_count'])==args.obstacles_render_only:
+            if bool(component['collision_shape_count'])!=component['collision_enabled']:
                 raise RuntimeError('obstacle collision shape disagrees with fallback mode')
         scene['contact_friction']={'ground_lateral_friction':args.friction,'car_lateral_friction':1.0,'effective_ground_car_friction':args.friction,'obstacle_lateral_friction':args.friction,'restitution':0.0}
         scene['physics_sleep']={'car_activation_state':'enable_sleeping','activation_state_value':p.ACTIVATION_STATE_ENABLE_SLEEPING}
         write_json(out/'scene.json',scene)
         targets=[]
-        for cy,cx in np.argwhere(component_ids>0):
+        solid_ids={c['instance_id'] for c in components if c['collision_enabled']}
+        for cy,cx in np.argwhere(np.isin(component_ids,list(solid_ids))):
             x,y=origin_x+cx*args.cell,cy*args.cell
             distance=math.hypot(x-car_pos[0],y-car_pos[1])
             if distance>max(width,length) and tops[cy,cx]>car_pos[2]:

@@ -27,7 +27,7 @@ def disk_quat(normal):
     return q[[3,0,1,2]].tolist()
 
 
-def render(root, replay=False):
+def render(root, replay=False, output=None, yaw_deg=0):
     if not torch.cuda.is_available():
         raise RuntimeError('geometric gsplat rendering requires CUDA')
     record=json.loads((root/'run.json').read_text())
@@ -89,14 +89,18 @@ def render(root, replay=False):
         feature_batches.append((batch,to_gpu(features)))
     forward=np.asarray(scene['camera']['forward'],dtype=np.float64)
     up=np.asarray(scene['camera']['up'],dtype=np.float64)
+    if yaw_deg:
+        turn=Rotation.from_rotvec(np.asarray(up)*math.radians(yaw_deg))
+        forward=turn.apply(forward)
     right=np.cross(forward,up)
     view=np.eye(4,dtype=np.float32);view[:3,:3]=np.stack([right,-up,forward])
     k=np.asarray(scene['camera']['intrinsics'],dtype=np.float32)
     view_gpu=to_gpu(view)[None];k_gpu=to_gpu(k)[None]
     width,height=504,280
-    base=root/'gaussian_replay' if replay else root
+    base=output if output is not None else (root/'gaussian_replay' if replay else root)
+    if output is not None: base.mkdir(parents=True, exist_ok=False)
     if replay: base.mkdir(exist_ok=False)
-    depth_dir=base/('depth' if replay else 'gaussian_depth');ids_dir=base/('instance_id' if replay else 'gaussian_instance_id');mix_dir=base/('edge_mixing' if replay else 'gaussian_edge_mixing')
+    depth_dir=base/('depth' if output is not None or replay else 'gaussian_depth');ids_dir=base/('instance_id' if output is not None or replay else 'gaussian_instance_id');mix_dir=base/('edge_mixing' if output is not None or replay else 'gaussian_edge_mixing')
     for directory in (depth_dir,ids_dir,mix_dir): directory.mkdir(exist_ok=False)
     frame_times=[]
     for frame in range(int(record['parameters']['seconds']*record['parameters']['video_fps'])):
@@ -131,6 +135,8 @@ def render(root, replay=False):
         Image.fromarray(millimeters).save(depth_dir/f'{frame:04d}.png')
         Image.fromarray(mixed).save(mix_dir/f'{frame:04d}.png')
     produced={str(path.relative_to(root)):hashlib.sha256(path.read_bytes()).hexdigest() for directory in (depth_dir,ids_dir,mix_dir) for path in sorted(directory.glob('*.png'))}
+    if output is not None:
+        return {'frame_times_s':frame_times,'entity_counts':counts,'depth_method':'gsplat expected optical z depth (ED)','entity_id_method':'chunked one-hot scores; argmax'}
     record['outputs'].update(produced)
     if replay:
         differences=[]

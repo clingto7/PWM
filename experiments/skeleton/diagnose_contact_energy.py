@@ -6,6 +6,7 @@ The saved scene is read only; results are printed as JSON.
 """
 import argparse
 import json
+import math
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -53,6 +54,9 @@ def run_case(geometry, settings, velocity, seconds, variant):
                 'effective_engine_parameters': effective_parameters,
                 'max_step_specific_energy_gain_j_kg': max(0., gain),
                 'peak_frame': frame, 'peak_time_s': frame/solver.hz,
+                'horizontal_distance_m': math.hypot(rows[-1][1][0]-rows[0][1][0],
+                                                    rows[-1][1][1]-rows[0][1][1]),
+                'vertical_displacement_m': rows[-1][1][2]-rows[0][1][2],
                 'before': {'z_m': before[1][2], 'linear_velocity_m_s': before[1][7:10],
                            'angular_velocity_rad_s': before[1][10:13],
                            'minimum_contact_distance_m': before[2], 'contact_count': before[3]},
@@ -66,6 +70,7 @@ def run_case(geometry, settings, velocity, seconds, variant):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('run_directory', type=Path)
+    parser.add_argument('--action', choices=('coast', 'ballistic'), default='ballistic')
     args = parser.parse_args()
     root = args.run_directory
     geometry = SceneArtifacts(root).load()
@@ -74,9 +79,11 @@ def main():
     params = run['parameters']
     settings = SimpleNamespace(root=str(root), friction=params['friction'],
                                radius=params['radius_m'])
-    velocity = impulses['ballistic']['delta_velocity_m_s']
-    saved_rows = json.loads((root/'ballistic'/'trajectory.json').read_text())
-    inertia = run['impulse_cases']['ballistic']['inertia_diagonal_kg_m2']
+    action = args.action
+    velocity = impulses[action]['delta_velocity_m_s']
+    trajectory = root/'trajectory.json' if action == 'coast' else root/action/'trajectory.json'
+    saved_rows = json.loads(trajectory.read_text())
+    inertia = run['impulse_cases'][action]['inertia_diagonal_kg_m2']
     saved_energy = [specific_energy(row, inertia, geometry.mass) for row in saved_rows]
     saved_gain, saved_frame = max((saved_energy[i]-saved_energy[i-1], i)
                                   for i in range(2, len(saved_energy)))
@@ -102,12 +109,18 @@ def main():
         {'name': 'default_split_low_erp', 'parameters': {'useSplitImpulse': 1,
                                                        'splitImpulsePenetrationThreshold': -0.04,
                                                        'contactERP': 0.1}},
+        {'name': 'default_split_erp_0_05', 'parameters': {'useSplitImpulse': 1,
+                                                       'splitImpulsePenetrationThreshold': -0.04,
+                                                       'contactERP': 0.05}},
+        {'name': 'default_split_erp_0_025', 'parameters': {'useSplitImpulse': 1,
+                                                        'splitImpulsePenetrationThreshold': -0.04,
+                                                        'contactERP': 0.025}},
     ]
     results = [run_case(geometry, settings, velocity, params['seconds'], v)
                for v in variants]
     baseline = results[0]
     reproduced = abs(baseline['max_step_specific_energy_gain_j_kg']-saved_gain) <= 1e-9
-    print(json.dumps({'saved_baseline_gain_j_kg': saved_gain,
+    print(json.dumps({'action': action, 'saved_baseline_gain_j_kg': saved_gain,
                       'saved_baseline_peak_frame': saved_frame,
                       'saved_baseline_reproduced': reproduced,
                       'variants': results}, indent=2))

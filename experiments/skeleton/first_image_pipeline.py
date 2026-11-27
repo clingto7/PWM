@@ -33,6 +33,13 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + '\n')
 
 
+def fit_settings(args):
+    classification = args.bundle/'classification.json' if args.bundle else None
+    return {'use_weak_prior': args.use_weak_prior,
+            'classification_artifact': 'classification.json' if classification and classification.is_file() else None,
+            'classification_sha256': digest(classification) if classification and classification.is_file() else None}
+
+
 def build(args):
     start = time.perf_counter()
     out = args.output.resolve()
@@ -57,8 +64,11 @@ def build(args):
             'obstacle_height_m': args.obstacle_height,
             'obstacle_min_pixels': args.obstacle_min_pixels,
             'obstacle_min_cells': args.obstacle_min_cells,
-            'obstacles_render_only': args.obstacles_render_only})
-        if saved_scene['inputs'] != {f'inputs/{name}': digest(inputs[key]) for key, name in {'image':'input.jpg', 'da3':'prediction.npz', 'sam_car':'car_mask.png', 'hunyuan_mesh':'car_shape.glb'}.items()}:
+            'obstacles_render_only': args.obstacles_render_only, **fit_settings(args)})
+        expected_inputs = {f'inputs/{name}': digest(inputs[key]) for key, name in {'image':'input.jpg', 'da3':'prediction.npz', 'sam_car':'car_mask.png', 'hunyuan_mesh':'car_shape.glb'}.items()}
+        if fit_settings(args)['classification_sha256'] is not None:
+            expected_inputs['classification.json'] = fit_settings(args)['classification_sha256']
+        if saved_scene['inputs'] != expected_inputs:
             raise ValueError('saved scene inputs differ from current bundle')
         for name in SceneArtifacts.NAMES:
             shutil.copyfile(saved/name, out/name)
@@ -127,7 +137,7 @@ def build(args):
     outputs={str(path.relative_to(out)):digest(path) for path in sorted(out.rglob('*')) if path.is_file() and path.name != 'stage_status.json'}
     record={'schema':2,'inputs':{name:{'path':bundled[name],'sha256':hashes[name]} for name,path in inputs.items()},'outputs':outputs,'parameters':{'radius_m':args.radius,'angle_deg':args.angle,'cell_m':args.cell,'friction':args.friction,'car_lateral_friction':1.0,'effective_ground_car_friction':args.friction,'density_kg_m3':args.density,'derived_mass_kg':mass,'near_depth_m':args.near_depth,'ground_inlier_m':args.ground_inlier,'speed_m_s':args.speed,'obstacle_min_speed_m_s':args.obstacle_min_speed,'car_sleep_activation_state':'enable_sleeping','seconds':args.seconds,'physics_hz':240,'obstacle_height_m':args.obstacle_height,'obstacle_min_pixels':args.obstacle_min_pixels,'obstacle_min_cells':args.obstacle_min_cells,'obstacles_render_only':args.obstacles_render_only,'video_fps':30},'timings_s':{'ground_fit':ground_time,'scene_build':scene_time,'simulation_and_replay':sim_time,'render_and_video':render_time,'total':time.perf_counter()-start},'versions':{'python':platform.python_version(),'numpy':version('numpy'),'pillow':version('pillow'),'pybullet':version('pybullet'),'pybullet_api':api_version(),'ffmpeg':subprocess.check_output(['ffmpeg','-version'],text=True).splitlines()[0]},'measurements':{'max_contact_penetration_m':penetration,'replay_trajectory_identical':replay_identical,'final_position_m':rows[-1][:3],'final_velocity_m_s':rows[-1][7:10],'initial_projection_bbox_xyxy':actual_bbox,'initial_projection_mask_iou':projection_evidence['mask_iou'],'mesh_fit':mesh_fit,'road_false_positive_ratio':false_ratio,'road_false_positive_cells':road_false,'road_cells':road_count,'obstacle_component_sizes_cells':[component['cells'] for component in components],'obstacle_component_count':len(components)}}
     record['stages'] = {
-        'ground_fit_scene': {'inputs': hashes, 'outputs': {name:outputs[name] for name in ('scene.json','heightmap.npz','fitted_car.obj','car_collision_hull.obj','obstacles.npz')}, 'parameters': {'radius_m':args.radius,'angle_deg':args.angle,'cell_m':args.cell,'near_depth_m':args.near_depth,'ground_inlier_m':args.ground_inlier,'obstacle_height_m':args.obstacle_height,'obstacle_min_pixels':args.obstacle_min_pixels,'obstacle_min_cells':args.obstacle_min_cells,'obstacles_render_only':args.obstacles_render_only}, 'seconds':ground_time+scene_time},
+        'ground_fit_scene': {'inputs': hashes, 'outputs': {name:outputs[name] for name in ('scene.json','heightmap.npz','fitted_car.obj','car_collision_hull.obj','obstacles.npz')}, 'parameters': {'radius_m':args.radius,'angle_deg':args.angle,'cell_m':args.cell,'near_depth_m':args.near_depth,'ground_inlier_m':args.ground_inlier,'obstacle_height_m':args.obstacle_height,'obstacle_min_pixels':args.obstacle_min_pixels,'obstacle_min_cells':args.obstacle_min_cells,'obstacles_render_only':args.obstacles_render_only, **fit_settings(args)}, 'seconds':ground_time+scene_time},
         'simulation_replay': {'inputs': {'scene.json':outputs['scene.json'],'heightmap.npz':outputs['heightmap.npz'],'fitted_car.obj':outputs['fitted_car.obj'],'car_collision_hull.obj':outputs['car_collision_hull.obj'],'obstacles.npz':outputs['obstacles.npz']}, 'outputs': {name:outputs[name] for name in ('trajectory.json','replay_trajectory.json')}, 'parameters': {'density_kg_m3':args.density,'derived_mass_kg':mass,'friction':args.friction,'speed_m_s':args.speed,'obstacle_min_speed_m_s':args.obstacle_min_speed,'car_sleep_activation_state':'enable_sleeping','physics_hz':240,'obstacles_render_only':args.obstacles_render_only}, 'seconds':sim_time},
         'proxy_render_video': {'inputs': {'scene.json':outputs['scene.json'],'heightmap.npz':outputs['heightmap.npz'],'trajectory.json':outputs['trajectory.json'],'obstacles.npz':outputs['obstacles.npz'],'fitted_car.obj':outputs['fitted_car.obj']}, 'outputs': {name:hashval for name,hashval in outputs.items() if name.startswith(('depth/','instance_id/')) or name in ('depth.mp4','instance_id.mp4','initial_projection.json')}, 'parameters': {'fps':30,'width':w,'height':h,'camera':'original fixed DA3'}, 'seconds':render_time}}
     record['impulse_cases']={name:{'trajectory':('' if name=='coast' else name+'/')+'trajectory.json','replay':('' if name=='coast' else name+'/')+'replay_trajectory.json','impulse':specifications[name],'inertia_diagonal_kg_m2':inertia_diagonal,'max_contact_penetration_m':penetrations[name],'obstacle_contact_samples_by_id':hits[name]} for name in impulses}
@@ -177,7 +187,8 @@ def build(args):
                  mesh_implementation, '1', mesh_parameters, mesh_seconds)
     fit_files = [name for name in ('classification.json', 'fit_diagnostics.json', 'fit_visuals/before.png',
                  'fit_visuals/after.png') if (out/name).is_file()]
-    record_stage(out, 'scene', input_files, [*SceneArtifacts.NAMES, *fit_files],
+    record_stage(out, 'scene', input_files + (['classification.json'] if (out/'classification.json').is_file() else []),
+                 [*SceneArtifacts.NAMES, *fit_files],
                  'first_image.reconstruct', '1', record['stages']['ground_fit_scene']['parameters'],
                  ground_time + scene_time)
     record_stage(out, 'actions', ['scene.json'], ['impulses.json'],

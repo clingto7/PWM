@@ -6,6 +6,7 @@ The saved scene is read only; results are printed as JSON.
 """
 import argparse
 import json
+import math
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,18 +25,21 @@ def specific_energy(row, inertia, mass):
             + 9.81*row[2])
 
 
-def run_case(geometry, settings, velocity, seconds, variant):
+def run_case(geometry, settings, velocity, seconds, variant, target_id=None):
     import pybullet as p
     client = p.connect(p.DIRECT)
     try:
         solver = PyBulletSolver(p)
-        ground, body, _ = solver.create_world(geometry, settings, Path(settings.root),
+        ground, body, obstacles = solver.create_world(geometry, settings, Path(settings.root),
                                                solver_parameters=variant['parameters'])
         effective_parameters = p.getPhysicsEngineParameters()
         inertia = p.getDynamicsInfo(body, -1)[2]
         mass = geometry.mass
-        p.resetBaseVelocity(body, linearVelocity=velocity)
+        launch = variant.get('velocity', velocity)
+        p.resetBaseVelocity(body, linearVelocity=[v*variant.get('speed_scale', 1.) for v in launch])
         rows = []
+        target_contact_samples = 0
+        max_penetration = 0.0
         for frame in range(int(seconds*solver.hz)):
             if frame:
                 p.stepSimulation()
@@ -43,16 +47,29 @@ def run_case(geometry, settings, velocity, seconds, variant):
             vel, omega = p.getBaseVelocity(body)
             row = [*pos, *quat, *vel, *omega]
             contacts = p.getContactPoints(bodyA=body)
+            target_contact_samples += any(obstacles.get(c[2]) == target_id for c in contacts) if target_id is not None else 0
+            max_penetration = max(max_penetration, max((-float(c[8]) for c in contacts), default=0.0))
             rows.append((specific_energy(row, inertia, mass), row,
                          min((float(c[8]) for c in contacts), default=None), len(contacts)))
         # Match check.py: omit stationary frame, then compare consecutive steps.
         gains = [(rows[i][0]-rows[i-1][0], i) for i in range(2, len(rows))]
         gain, frame = max(gains)
         before, after = rows[frame-1], rows[frame]
+        final = rows[-1][1]
         return {'variant': variant['name'], 'parameters': variant['parameters'],
+                'speed_scale': variant.get('speed_scale', 1.),
+                'launch_velocity_m_s': [v*variant.get('speed_scale', 1.) for v in launch],
+                'target_contact_samples': target_contact_samples,
+                'max_contact_penetration_m': max_penetration,
+                'final_position_m': final[:3],
+                'final_linear_speed_m_s': math.sqrt(sum(v*v for v in final[7:10])),
+                'final_angular_speed_rad_s': math.sqrt(sum(v*v for v in final[10:13])),
                 'effective_engine_parameters': effective_parameters,
                 'max_step_specific_energy_gain_j_kg': max(0., gain),
                 'peak_frame': frame, 'peak_time_s': frame/solver.hz,
+                'horizontal_distance_m': math.hypot(rows[-1][1][0]-rows[0][1][0],
+                                                    rows[-1][1][1]-rows[0][1][1]),
+                'vertical_displacement_m': rows[-1][1][2]-rows[0][1][2],
                 'before': {'z_m': before[1][2], 'linear_velocity_m_s': before[1][7:10],
                            'angular_velocity_rad_s': before[1][10:13],
                            'minimum_contact_distance_m': before[2], 'contact_count': before[3]},
@@ -66,6 +83,7 @@ def run_case(geometry, settings, velocity, seconds, variant):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('run_directory', type=Path)
+    parser.add_argument('--action', choices=('coast', 'ballistic', 'obstacle'), default='ballistic')
     args = parser.parse_args()
     root = args.run_directory
     geometry = SceneArtifacts(root).load()
@@ -74,9 +92,11 @@ def main():
     params = run['parameters']
     settings = SimpleNamespace(root=str(root), friction=params['friction'],
                                radius=params['radius_m'])
-    velocity = impulses['ballistic']['delta_velocity_m_s']
-    saved_rows = json.loads((root/'ballistic'/'trajectory.json').read_text())
-    inertia = run['impulse_cases']['ballistic']['inertia_diagonal_kg_m2']
+    action = args.action
+    velocity = impulses[action]['delta_velocity_m_s']
+    trajectory = root/'trajectory.json' if action == 'coast' else root/action/'trajectory.json'
+    saved_rows = json.loads(trajectory.read_text())
+    inertia = run['impulse_cases'][action]['inertia_diagonal_kg_m2']
     saved_energy = [specific_energy(row, inertia, geometry.mass) for row in saved_rows]
     saved_gain, saved_frame = max((saved_energy[i]-saved_energy[i-1], i)
                                   for i in range(2, len(saved_energy)))
@@ -102,12 +122,37 @@ def main():
         {'name': 'default_split_low_erp', 'parameters': {'useSplitImpulse': 1,
                                                        'splitImpulsePenetrationThreshold': -0.04,
                                                        'contactERP': 0.1}},
+        {'name': 'default_split_erp_0_05', 'parameters': {'useSplitImpulse': 1,
+                                                       'splitImpulsePenetrationThreshold': -0.04,
+                                                       'contactERP': 0.05}},
+        {'name': 'default_split_erp_0_025', 'parameters': {'useSplitImpulse': 1,
+                                                        'splitImpulsePenetrationThreshold': -0.04,
+                                                        'contactERP': 0.025}},
     ]
-    results = [run_case(geometry, settings, velocity, params['seconds'], v)
+    if action == 'obstacle':
+        variants = [variants[0]] + [
+            {'name': f'obstacle_speed_{scale:.2f}', 'parameters': {'contactERP':0.025},
+             'speed_scale':scale} for scale in (1.0, 1.1, 1.15, 1.2, 1.3)]
+        import numpy as np
+        with np.load(root/'obstacles.npz') as obstacle_data:
+            cells = np.argwhere(obstacle_data['instance_id'] == impulses[action]['target_obstacle_id'])
+        cell_m = geometry.cell_m
+        centroid = [geometry.origin_x + float(cells[:, 1].mean())*cell_m,
+                    float(cells[:, 0].mean())*cell_m]
+        origin = geometry.car_pos
+        direction = [centroid[0]-origin[0], centroid[1]-origin[1]]
+        length = math.hypot(*direction)
+        speed = math.hypot(*velocity[:2])
+        centroid_velocity = [speed*direction[0]/length, speed*direction[1]/length, 0.0]
+        variants += [
+            {'name': f'obstacle_centroid_{scale:.2f}', 'parameters': {'contactERP':0.025},
+             'velocity':centroid_velocity, 'speed_scale':scale} for scale in (1.0, 1.1, 1.2)]
+    target_id = impulses[action]['target_obstacle_id']
+    results = [run_case(geometry, settings, velocity, params['seconds'], v, target_id)
                for v in variants]
     baseline = results[0]
     reproduced = abs(baseline['max_step_specific_energy_gain_j_kg']-saved_gain) <= 1e-9
-    print(json.dumps({'saved_baseline_gain_j_kg': saved_gain,
+    print(json.dumps({'action': action, 'saved_baseline_gain_j_kg': saved_gain,
                       'saved_baseline_peak_frame': saved_frame,
                       'saved_baseline_reproduced': reproduced,
                       'variants': results}, indent=2))

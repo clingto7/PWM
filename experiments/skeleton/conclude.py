@@ -27,6 +27,8 @@ def conclude(root, thresholds=None):
     sound = checks.get('hashes') is True
     projection = metrics.get('initial_projection_mask_iou')
     ground = metrics.get('ground_fit_rms_m')
+    contact_ground = metrics.get('contact_fit_rms_m')
+    fit_ground = contact_ground if contact_ground is not None else ground
     road = metrics.get('road_false_positive_ratio')
     fallback = scene.get('obstacles', {}).get('render_only', record.get('parameters', {}).get('obstacles_render_only'))
     proxy_keys = ['frame_count']
@@ -57,8 +59,10 @@ def conclude(root, thresholds=None):
     conditions = {
         'vehicle_silhouette': {'iou': projection, 'threshold_min': limits['initial_mask_iou_min'],
                                'decision': decision(projection, limits['initial_mask_iou_min'], minimum=True, evidence=sound and checks.get('initial_projection_record') is True)},
-        'ground_fit': {'rms_m': ground, 'threshold_max_m': limits['ground_fit_rms_m'],
-                       'decision': decision(ground, limits['ground_fit_rms_m'], evidence=sound and checks.get('ground_fit') is True)},
+        'ground_fit': {'rms_m': fit_ground, 'full_support_rms_m': ground,
+                       'contact_fit_coverage_fraction':metrics.get('contact_fit_coverage_fraction'),
+                       'threshold_max_m': limits['ground_fit_rms_m'],
+                       'decision': decision(fit_ground, limits['ground_fit_rms_m'], evidence=sound and checks.get('ground_fit') is True)},
         'road_obstacles': {'false_positive_ratio': road, 'threshold_max': limits['road_false_positive_ratio_max'],
                            'render_only_fallback': fallback, 'proxy_signal_usable': proxy_usable,
                            'decision': road_gate},

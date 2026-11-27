@@ -1,7 +1,8 @@
 import unittest
 import numpy as np
+from types import SimpleNamespace
 
-from car_fit import eligible_prior, raster_depth, support_gap
+from car_fit import eligible_prior, raster_depth, support_gap, fit_choice_records
 
 
 class FitEvidenceTest(unittest.TestCase):
@@ -27,6 +28,14 @@ class FitEvidenceTest(unittest.TestCase):
         bottom = np.array([[0, 0, 0], [.1, 0, 0]])
         support = (np.array([[.12]]), np.array([[True]]), 0, 1)
         self.assertAlmostEqual(support_gap(bottom, (1, 0, 0, 0), 0, support), -.12)
+
+    def test_opt_in_prior_keeps_distinct_no_prior_scale_and_pose(self):
+        baseline = SimpleNamespace(x=np.array([1.1, .2, 2., 3.]), fun=.12)
+        prior = SimpleNamespace(x=np.array([1.7, .3, 4., 5.]), fun=.15)
+        records = fit_choice_records(baseline, prior, True)
+        self.assertEqual(records['selected_fit'], 'weak_prior')
+        self.assertEqual(records['no_prior'], {'scale': 1.1, 'pose': [.2, 2., 3.], 'objective': .12})
+        self.assertNotEqual(records['no_prior']['scale'], prior.x[0])
 
 
 if __name__ == '__main__':

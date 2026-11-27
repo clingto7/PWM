@@ -15,6 +15,16 @@ def eligible_prior(evidence):
                 and evidence.get('source') == 'classifier')
 
 
+def fit_choice_records(no_prior, prior, use_weak_prior):
+    """Keep the baseline record independent of the selected scene geometry."""
+    if use_weak_prior and prior is None:
+        raise ValueError('weak prior fit is unavailable')
+    return {'no_prior': {'scale': float(no_prior.x[0]),
+                         'pose': list(map(float, no_prior.x[1:])),
+                         'objective': float(no_prior.fun)},
+            'selected_fit': 'weak_prior' if use_weak_prior else 'no_prior'}
+
+
 def support_gap(bottom, pose, ground_z, support):
     """Signed bottom-surface gap to reconstructed support cells under the pose."""
     grid, valid_grid, origin, cell = support
@@ -207,6 +217,7 @@ def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, 
         alternatives.append(float(objective(trial)))
     uncertainty = {'method': 'objective profile at +/-20 percent scale',
                    'relative_scale_probe': [.8, 1., 1.2], 'objective': [alternatives[1], alternatives[0], alternatives[2]]}
+    choice_records = fit_choice_records(result, prior_result, use_weak_prior)
     return fitted, {'scale':scale, 'yaw_rad':yaw, 'position_m':[x,y,ground_z+size[2]/2],
                     'size_m':size, 'size_check':{'reference_model':'MINI Cooper S Convertible (2021)',
                     'reference_size_m':REAL_SIZE_M, 'source':REAL_SIZE_SOURCE,
@@ -215,8 +226,7 @@ def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, 
                     'ground_contact_error_m':after['support_contact_gap_m'],
                     'diagnostics': {'before': before, 'after': after},
                     'scale_uncertainty': uncertainty,
-                    'no_prior': {'scale': scale, 'objective': float(result.fun)},
-                    'selected_fit': 'weak_prior' if use_weak_prior else 'no_prior',
+                    **choice_records,
                     'weak_category_prior': {'eligible': prior_enabled, 'classification_evidence_threshold': PRIOR_CONFIDENCE,
                                             'weight': PRIOR_WEIGHT, 'reason': None if prior_enabled else 'no eligible classifier evidence',
                                             'result': None if prior_result is None else {'scale': float(prior_result.x[0]),

@@ -13,7 +13,8 @@ def render_saved(root, output, params=None, yaw_deg=0):
     if output.exists() and any(output.iterdir()):
         raise ValueError(f'replay output is not empty: {output}')
     output.mkdir(parents=True,exist_ok=True)
-    scene=SceneArtifacts(root).load()
+    artifacts=SceneArtifacts(root)
+    scene=artifacts.load()
     rows=json.loads((root/'trajectory.json').read_text())
     if params is None:
         params=json.loads((root/'run.json').read_text())['parameters']
@@ -26,7 +27,7 @@ def render_saved(root, output, params=None, yaw_deg=0):
     projection=[2*fx/width,0,0,0,0,2*fy/height,0,0,
                 1-2*cx/width,2*cy/height-1,(far+near)/(near-far),-1,
                 0,0,2*far*near/(near-far),0]
-    with BulletRasterSession(scene,args,width,height,near,far,projection) as frame_source:
+    with BulletRasterSession(artifacts,args,width,height,near,far,projection) as frame_source:
         if yaw_deg:
             frame_source.set_camera_yaw(yaw_deg)
         depth=output/'depth';ids=output/'instance_id';depth.mkdir();ids.mkdir()

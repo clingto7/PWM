@@ -3,9 +3,8 @@ import argparse
 import json
 from pathlib import Path
 from types import SimpleNamespace
-import pybullet as p
 from artifacts import SceneArtifacts
-from physics import PyBulletSolver
+from physics import BulletRasterSession
 from raster import RasterRenderer
 
 
@@ -27,18 +26,11 @@ def render_saved(root, output, params=None):
     projection=[2*fx/width,0,0,0,0,2*fy/height,0,0,
                 1-2*cx/width,2*cy/height-1,(far+near)/(near-far),-1,
                 0,0,2*far*near/(near-far),0]
-    client=p.connect(p.DIRECT)
-    try:
-        solver=PyBulletSolver(p)
-        ground,body,obstacles=solver.create_world(scene,args,root)
-        view=p.computeViewMatrix([0,0,0],camera['forward'],camera['up'])
+    with BulletRasterSession(scene,args,width,height,near,far,projection) as frame_source:
         depth=output/'depth';ids=output/'instance_id';depth.mkdir();ids.mkdir()
-        renderer=RasterRenderer(p,width,height,near,far,view,projection,
-                                ground,body,obstacles,args.radius,params['seconds'])
+        renderer=RasterRenderer(frame_source,width,height,args.radius,params['seconds'])
         _,times=renderer.render(rows,depth,ids)
         return times
-    finally:
-        p.disconnect(client)
 
 
 if __name__=='__main__':

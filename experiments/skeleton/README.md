@@ -184,16 +184,17 @@ The command verifies the scene contract and source hashes before copying scene
 artifacts. It then runs the saved-scene physics and raster path. A failed run
 writes `stage_status.json` with the failing stage and reason. The read-only
 `check.py` verifies new contracts when present and keeps legacy runs compatible.
-The current ticket uses saved DA3/SAM/Hunyuan outputs; raw-image inference is
-part of later tickets.
+The first-image stage migration uses saved DA3/SAM/Hunyuan outputs; ticket 16
+adds original-image DA3 and SAM inference below.
 
 Scene resume rejects any changed scene geometry or obstacle setting recorded in
 the saved scene contract (for example `--cell` or `--radius`). Physics now writes
 `contacts.json` with a versioned per-case contact and penetration record; the
 physics contract hashes it, and the checker compares it with the run record.
-`physics.PyBulletSolver` creates and solves the PyBullet world;
-`first_image_stages.py` calls that adapter and the raster renderer, while
+`physics.solve_saved_scene` calls `physics.PyBulletSolver` for world creation
+and state transitions; `first_image_stages.py` calls the raster renderer, while
 `first_image_pipeline.py` coordinates stage calls and writes provenance.
+
 # Ticket 16: original-image observation
 
 `observation.py` accepts an original screenshot and emits checked depth,

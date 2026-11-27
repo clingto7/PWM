@@ -243,7 +243,7 @@ sources or local weight paths (`depth_source`, `segmentation_source`,
 sources, installed local weights are required. No download is attempted.
 `chain.json` records the requested configuration, input hashes, selected
 stage contracts and implementations, output hashes, wall-clock time and the
-stage of any failure. The checker reads only. Observation replay reuses checked
+stage of any failure. The checker reads only and reruns the saved-run semantic gates for energy, contact, projection and replay; chain completion also requires those gates. Observation replay reuses checked
 observation; scene replay also reuses the checked scene; physics/render replay
 consumes the saved scene and trajectory through the renderer adapter. Renderer
 comparisons therefore use identical upstream hashes. Replay output must be

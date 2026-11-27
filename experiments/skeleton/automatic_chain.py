@@ -45,6 +45,17 @@ def invoke(command):
     subprocess.run([sys.executable, *map(str, command)], check=True)
 
 
+
+def semantic_check(run_root):
+    result = subprocess.run([sys.executable, str(Path(__file__).with_name('check.py')),
+                             str(run_root)], capture_output=True, text=True)
+    try:
+        report = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f'saved-run checker produced no JSON: {result.stderr}') from exc
+    return {'passed': result.returncode == 0 and report.get('passed') is True,
+            'checks': report.get('checks', {}), 'metrics': report.get('metrics', {})}
+
 def run(image, config, output, resume_observation=None, resume_scene=None):
     started = time.perf_counter()
     output = output.resolve()
@@ -110,6 +121,11 @@ def run(image, config, output, resume_observation=None, resume_scene=None):
         manifest['implementations']['proxy_render'] = {'name': data.get('renderer', 'raster'),
                                                          'version': '1', 'parameters': {'nearby_yaw_deg': 5}}
         manifest['stages']['proxy_render'] = {'contract': 'proxy/render.json', 'seconds': render['seconds']}
+        manifest['stage'] = 'semantic_check'
+        semantic = semantic_check(run_root)
+        manifest['semantic_check'] = semantic
+        if not semantic['passed']:
+            raise ValueError('saved-run physical or visual acceptance failed')
         manifest['outputs'] = {str(path.relative_to(output)): digest(path) for path in output.rglob('*')
                                if path.is_file() and path.name != 'chain.json'}
         manifest['status'] = 'complete'
@@ -150,8 +166,14 @@ def check(root):
             for name, expected in render['inputs'].items())
     except (OSError, ValueError, KeyError):
         integrity['proxy_status'] = False
+    try:
+        semantic = semantic_check(root/'automatic/run')
+        integrity['semantic_check'] = semantic['passed']
+    except (OSError, ValueError) as exc:
+        semantic = {'passed': False, 'reason': str(exc)}
+        integrity['semantic_check'] = False
     return {'status': 'complete' if integrity and all(integrity.values()) else 'failed',
-            'integrity': integrity, 'timings_s': manifest['timings_s']}
+            'integrity': integrity, 'semantic_check': semantic, 'timings_s': manifest['timings_s']}
 
 
 def main():

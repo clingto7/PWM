@@ -68,3 +68,17 @@ class ReplayRoutingTest(unittest.TestCase):
                 for call in invoke.call_args_list:
                     self.assertEqual(call.args[0][1], (saved/'automatic/run').resolve())
             self.assertFalse(list(root.glob('*.replay-config.json')))
+
+class SemanticGateTest(unittest.TestCase):
+    def test_saved_run_checker_failure_blocks_chain(self):
+        from unittest.mock import patch
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('automatic_chain', CLI)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        complete = subprocess.CompletedProcess([], 1, stdout=json.dumps({
+            'passed': False, 'checks': {'energy': False}, 'metrics': {'energy_gain': 1}}))
+        with patch.object(module.subprocess, 'run', return_value=complete):
+            result = module.semantic_check(Path('/saved/run'))
+        self.assertFalse(result['passed'])
+        self.assertFalse(result['checks']['energy'])

@@ -126,9 +126,23 @@ def select_subject(masks_path, depth_path, image_path, output):
                            'bbox_xyxy_256':[int(xs.min()),int(ys.min()),int(xs.max()+1),int(ys.max()+1)],
                            'prompt_xy':points[idx].tolist()})
     candidates.sort(key=lambda value:value['score'], reverse=True)
+    # SAM point prompts often return a whole instance and several nested parts.
+    # A nested part is evidence for the same subject, not a competing subject.
+    for candidate in candidates:
+        mask = masks[candidate['index']].astype(bool)
+        for other in candidates:
+            if other['index'] == candidate['index'] or other['area_fraction'] < 1.5*candidate['area_fraction']:
+                continue
+            if other['score'] < candidate['score']-.08:
+                continue
+            parent = masks[other['index']].astype(bool)
+            if (mask & parent).sum()/max(int(mask.sum()), 1) >= .95:
+                candidate['contained_by'] = other['index']
+                break
+    distinct = [candidate for candidate in candidates if 'contained_by' not in candidate]
     # Inspect only the short list. The adjacent strip below the lower silhouette
     # is a cheap local support cue, not a full support-plane reconstruction.
-    for candidate in candidates[:3]:
+    for candidate in distinct[:3]:
         mask = masks[candidate['index']].astype(bool)
         support = []
         for x in np.flatnonzero(mask.any(axis=0)):
@@ -141,7 +155,7 @@ def select_subject(masks_path, depth_path, image_path, output):
         candidate['contact'] = {'supported':contact, 'sample_count':len(support),
                                 'relative_depth_gap':round(gap,6) if gap is not None else None}
         candidate['final_score'] = round(candidate['score'] + (.12 if contact else 0), 6)
-    eligible = sorted((c for c in candidates[:3] if c['contact']['supported']),
+    eligible = sorted((c for c in distinct[:3] if c['contact']['supported']),
                       key=lambda c:c['final_score'], reverse=True)
     reason = None
     if not eligible:
@@ -150,7 +164,7 @@ def select_subject(masks_path, depth_path, image_path, output):
         reason = 'insufficient depth and contour evidence'
     elif len(eligible)>1 and eligible[0]['final_score']-eligible[1]['final_score'] < .035:
         reason = 'near-tied supported candidates'
-    elif candidates[0]['index'] != eligible[0]['index'] and candidates[0]['score']-eligible[0]['score'] > .16:
+    elif distinct[0]['index'] != eligible[0]['index'] and distinct[0]['score']-eligible[0]['score'] > .16:
         reason = 'foreground occluder conflicts with support/contact evidence'
     if reason:
         write(output/'selection.json', {'candidates':candidates,'selected_index':None,

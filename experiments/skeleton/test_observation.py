@@ -19,9 +19,9 @@ class ObservationCliTest(unittest.TestCase):
             image = root/'image.jpg'
             Image.new('RGB', (256, 256)).save(image)
             depth = np.full((1, 256, 256), 12, dtype=np.float32)
-            depth[45:85, 100:140] = 4
-            depth[85:91, 100:140] = 4.4
-            depth[170:235, 80:165] = 9
+            depth[0, 45:85, 100:140] = 4
+            depth[0, 85:91, 100:140] = 4.4
+            depth[0, 170:235, 80:165] = 9
             da3 = root/'depth'; da3.mkdir()
             np.savez_compressed(da3/'prediction.npz', depth=depth, intrinsics=np.eye(3)[None])
             (da3/'run.json').write_text(json.dumps({'is_metric': True}))
@@ -48,7 +48,7 @@ class ObservationCliTest(unittest.TestCase):
             root = Path(tmp)
             image = root/'image.jpg'; Image.new('RGB', (256, 256)).save(image)
             depth = np.full((1, 256, 256), 20, dtype=np.float32)
-            depth[30:65, 90:130] = 3
+            depth[0, 30:65, 90:130] = 3
             da3 = root/'depth'; da3.mkdir()
             np.savez_compressed(da3/'prediction.npz', depth=depth, intrinsics=np.eye(3)[None])
             (da3/'run.json').write_text(json.dumps({'is_metric': True}))
@@ -65,6 +65,33 @@ class ObservationCliTest(unittest.TestCase):
             self.assertIsNone(selection['selected_index'])
             self.assertIn('contact', selection['reason'])
             self.assertFalse((out/'mesh').exists())
+
+    def test_distinct_supported_tie_abstains(self):
+        import numpy as np
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = root/'image.jpg'; Image.new('RGB', (256, 256)).save(image)
+            depth = np.full((1, 256, 256), 12, dtype=np.float32)
+            masks = np.zeros((2, 256, 256), dtype=bool)
+            for index, left in enumerate((50, 166)):
+                masks[index, 60:100, left:left+40] = True
+                depth[0, 60:100, left:left+40] = 4
+                depth[0, 100:106, left:left+40] = 4.4
+            da3 = root/'depth'; da3.mkdir()
+            np.savez_compressed(da3/'prediction.npz', depth=depth, intrinsics=np.eye(3)[None])
+            (da3/'run.json').write_text(json.dumps({'is_metric': True}))
+            sam = root/'sam'; sam.mkdir()
+            np.savez_compressed(sam/'sam2_masks.npz', masks_256=masks,
+                points_xy=np.array([[70, 80], [186, 80]]), scores=np.array([.95, .95]), selected=np.array([0, 1]))
+            (sam/'run.json').write_text('{}')
+            out = root/'observation'
+            result = subprocess.run([sys.executable, str(CLI), str(image), str(out),
+                '--depth-source', str(da3), '--segmentation-source', str(sam)], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            selection = json.loads((out/'selection.json').read_text())
+            self.assertIsNone(selection['selected_index'])
+            self.assertIn('near-tied', selection['reason'])
     def test_distant_selected_mask_island_does_not_expand_mesh_crop(self):
         import numpy as np
         from PIL import Image

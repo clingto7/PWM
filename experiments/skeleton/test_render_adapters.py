@@ -32,13 +32,18 @@ class RendererBoundaryTest(unittest.TestCase):
     def test_raster_replay_uses_frame_source_camera_method(self):
         calls = []
         class Source:
-            def __init__(self, *args): pass
+            def __init__(self, artifacts, *args):
+                # The renderer session must receive the reusable artifact handle.
+                # Its own __enter__ loads geometry to construct the Bullet world.
+                self.artifacts = artifacts
+                self.artifacts.load()
             def __enter__(self): return self
             def __exit__(self, *args): pass
             def set_camera_yaw(self, yaw): calls.append(yaw)
         class Artifacts:
-            def __init__(self, root): self.scene = {'camera': {'intrinsics': [[100,0,252],[0,100,140],[0,0,1]]}}
-            def load(self): return self
+            def __init__(self, root): pass
+            def load(self):
+                return types.SimpleNamespace(scene={'camera': {'intrinsics': [[100,0,252],[0,100,140],[0,0,1]]}})
         class Renderer:
             def __init__(self, *args): pass
             def render(self, *args): return None, [0.1]

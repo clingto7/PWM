@@ -102,7 +102,15 @@ def build(args):
     road_false=scene['obstacles']['road_false_positive_cells']
     false_ratio=scene['obstacles']['road_false_positive_ratio']
     write_json(out/'stage_status.json', {'stage':'physics','status':'running'})
+    upstream_hashes = {name: digest(out/name) for name in SceneArtifacts.NAMES}
+    upstream_hashes.update({name: digest(path) for name, path in inputs.items()})
+    def check_upstream(stage):
+        current = {name: digest(out/name) for name in SceneArtifacts.NAMES}
+        current.update({name: digest(path) for name, path in inputs.items()})
+        if current != upstream_hashes:
+            raise RuntimeError(f'{stage} changed saved scene or observation artifacts')
     physics_result = solve_saved_scene(out, args, scene, component_ids, tops)
+    check_upstream('physics')
     inertia_diagonal = physics_result['inertia_diagonal']
     trajectories = physics_result['trajectories']
     penetrations = physics_result['penetrations']
@@ -115,6 +123,7 @@ def build(args):
     replay_identical = rows == physics_result['replays']['coast']
     write_json(out/'stage_status.json', {'stage':'raster','status':'running'})
     render_result = render_saved_scene(out, args, scene, car, target, rows)
+    check_upstream('renderer')
     raster_frame_times = render_result['raster_frame_times']
     projection_evidence = render_result['projection_evidence']
     actual_bbox = render_result['actual_bbox']
@@ -198,7 +207,7 @@ def build(args):
                         'obstacle/trajectory.json', 'obstacle/replay_trajectory.json',
                         'contacts.json']
     record_stage(out, 'physics', [*SceneArtifacts.NAMES, 'impulses.json'],
-                 [*trajectory_files, 'fit_trial.json'],
+                 [*trajectory_files, 'fit_trial.json', 'physics_session.json'],
                  'PyBulletSolver', str(api_version()),
                  record['stages']['simulation_replay']['parameters'], sim_time)
     render_files = [name for name in outputs if name.startswith(('depth/', 'instance_id/'))

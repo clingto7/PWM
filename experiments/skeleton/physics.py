@@ -3,6 +3,7 @@
 The adapter owns collision-world construction, stepping, and contact
 measurements. A replacement can use the same reconstructed scene files.
 """
+import hashlib
 import math
 import numpy as np
 import json
@@ -157,20 +158,23 @@ def solve_saved_scene(out, args, scene, component_ids, tops, actions=None):
         inertia_diagonal=list(p.getDynamicsInfo(body,-1)[2])
         shape_counts={instance_id:len(p.getCollisionShapeData(obstacle_body,-1)) for obstacle_body,instance_id in obstacle_bodies.items()}
         for component in components:
-            component['collision_shape_count']=shape_counts[component['instance_id']]
-            if bool(component['collision_shape_count'])!=component['collision_enabled']:
+            count=shape_counts[component['instance_id']]
+            if bool(count)!=component['collision_enabled']:
                 raise RuntimeError('obstacle collision shape disagrees with fallback mode')
-        scene['contact_friction']={'ground_lateral_friction':args.friction,'car_lateral_friction':1.0,'effective_ground_car_friction':args.friction,'obstacle_lateral_friction':args.friction,'restitution':0.0}
-        scene['physics_sleep']={'car_activation_state':'enable_sleeping','activation_state_value':p.ACTIVATION_STATE_ENABLE_SLEEPING}
+        session={'schema':1, 'solver':'PyBulletSolver',
+                 'scene_sha256':hashlib.sha256((out/'scene.json').read_bytes()).hexdigest(),
+                 'obstacle_collision_shape_counts_by_id':shape_counts}
+        session['contact_friction']={'ground_lateral_friction':args.friction,'car_lateral_friction':1.0,'effective_ground_car_friction':args.friction,'obstacle_lateral_friction':args.friction,'restitution':0.0}
+        session['physics_sleep']={'car_activation_state':'enable_sleeping','activation_state_value':p.ACTIVATION_STATE_ENABLE_SLEEPING}
         settings=contact_solver_parameters()
-        scene['physics_solver']={'fixed_time_step_s':settings['fixedTimeStep'],
+        session['physics_solver']={'fixed_time_step_s':settings['fixedTimeStep'],
                                  'solver_iterations':settings['numSolverIterations'],
                                  'substeps_per_recorded_state':settings['numSubSteps'],
                                  'split_impulse':bool(settings['useSplitImpulse']),
                                  'deterministic_overlapping_pairs':bool(settings['deterministicOverlappingPairs']),
                                  'contact_erp':settings['contactERP'],
                                  'effective_engine_parameters':p.getPhysicsEngineParameters()}
-        write_json(out/'scene.json',scene)
+        write_json(out/'physics_session.json',session)
         targets=[]
         solid_ids={c['instance_id'] for c in components if c['collision_enabled']}
         for cy,cx in np.argwhere(np.isin(component_ids,list(solid_ids))):
@@ -213,6 +217,13 @@ def solve_saved_scene(out, args, scene, component_ids, tops, actions=None):
             name: {'max_contact_penetration_m': penetrations[name],
                    'obstacle_contact_samples_by_id': hits[name]}
             for name in impulses}})
+        session['fit_trial'] = trial
+        session['inertia_diagonal_kg_m2'] = inertia_diagonal
+        session['actions'] = 'impulses.json'
+        session['contacts'] = 'contacts.json'
+        session['trajectory_by_case'] = {name: ('' if name == 'coast' else name + '/') + 'trajectory.json'
+                                         for name in impulses}
+        write_json(out/'physics_session.json', session)
         return {'inertia_diagonal': inertia_diagonal, 'trajectories': trajectories,
                 'penetrations': penetrations, 'replays': replays, 'hits': hits,
                 'specifications': specifications, 'impulses': impulses,

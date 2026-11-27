@@ -100,7 +100,9 @@ def main():
     saved_energy = [specific_energy(row, inertia, geometry.mass) for row in saved_rows]
     saved_gain, saved_frame = max((saved_energy[i]-saved_energy[i-1], i)
                                   for i in range(2, len(saved_energy)))
-    metadata = geometry.scene.get('physics_solver') or {}
+    session_path = root/'physics_session.json'
+    metadata = (json.loads(session_path.read_text()).get('physics_solver')
+                if session_path.is_file() else geometry.scene.get('physics_solver')) or {}
     if 'contact_erp' in metadata:
         baseline_parameters = {'contactERP': metadata['contact_erp']}
         if metadata.get('split_impulse') is True:

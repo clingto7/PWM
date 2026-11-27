@@ -15,10 +15,15 @@ from gates import BASELINE_INITIAL_MASK_IOU, THRESHOLDS
 def check(root):
     record=json.loads((root/'run.json').read_text())
     scene=json.loads((root/'scene.json').read_text())
+    session=json.loads((root/'physics_session.json').read_text()) if (root/'physics_session.json').is_file() else scene
+    if session is not scene:
+        integrity_session_hash = session.get('scene_sha256') == hashlib.sha256((root/'scene.json').read_bytes()).hexdigest()
     trajectory=json.loads((root/'trajectory.json').read_text())
     replay=json.loads((root/'replay_trajectory.json').read_text())
     projection=json.loads((root/'initial_projection.json').read_text())
     integrity={}
+    if session is not scene:
+        integrity['physics_session_scene'] = integrity_session_hash
     for name,expected in record['outputs'].items():
         path=(root/name).resolve()
         integrity[name]=path.is_relative_to(root) and path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest()==expected
@@ -184,12 +189,14 @@ def check(root):
         checks['obstacle_road_ratio']=road_count>0 and road_count==obstacles['road_cells']==m['road_cells'] and false_count==obstacles['road_false_positive_cells']==m['road_false_positive_cells'] and ratio==obstacles['road_false_positive_ratio']==m['road_false_positive_ratio']
         checks['car_footprint_clear']=not np.any(footprint & (grid>0)) and obstacles['car_footprint_obstacle_cells']==0
         checks['obstacle_render_ids']={1,2}.issubset(image_ids) and image_ids.issubset({1,2}|expected_ids) and not missing_ids
-        checks['obstacle_collision_mode']=all((not c['collision_enabled'] or not obstacles['render_only']) and (c['collision_shape_count']>0)==c['collision_enabled'] for c in components)
+        shape_counts=session.get('obstacle_collision_shape_counts_by_id', {})
+        counts=[shape_counts.get(str(c['instance_id']), c.get('collision_shape_count', 0)) for c in components]
+        checks['obstacle_collision_mode']=all((not c['collision_enabled'] or not obstacles['render_only']) and (count>0)==c['collision_enabled'] for c,count in zip(components,counts))
         if support is not None:
             evidence=scene['support_evidence']
             checks['support_evidence']=bool(np.array_equal(valid,support>0) and all(int(np.count_nonzero(support==code))==evidence[name] for code,name in ((0,'unknown_cells'),(1,'visible_cells'),(2,'interpolated_cells'))))
             metrics['support_evidence']=evidence
-        metrics.update({'road_false_positive_ratio':ratio,'road_false_positive_cells':false_count,'road_cells':road_count,'obstacle_component_sizes_cells':sizes,'obstacle_rendered_ids':sorted(image_ids & expected_ids),'missing_obstacle_render_ids':missing_ids,'obstacle_collision_shape_counts':[c['collision_shape_count'] for c in components],'obstacles_render_only':obstacles['render_only']})
+        metrics.update({'road_false_positive_ratio':ratio,'road_false_positive_cells':false_count,'road_cells':road_count,'obstacle_component_sizes_cells':sizes,'obstacle_rendered_ids':sorted(image_ids & expected_ids),'missing_obstacle_render_ids':missing_ids,'obstacle_collision_shape_counts':counts,'obstacles_render_only':obstacles['render_only']})
     cases_record=record.get('impulse_cases',{})
     schema=record.get('schema',1)
     if schema>=2:
@@ -223,8 +230,8 @@ def check(root):
             max_angular_speed=max(math.sqrt(sum(v*v for v in row[10:13])) for row in rows)
             penetration=case['max_contact_penetration_m']
             case_checks={'impulse_record':case['impulse']==impulse and impulse['application_point']=='center_of_mass' and impulse['application_point_world_m']==box['initial_position_m'] and math.isclose(impulse['magnitude_n_s'],params['derived_mass_kg']*speed,rel_tol=1e-9) and all(math.isclose(a,b/speed,abs_tol=1e-9) for a,b in zip(impulse['direction'],delta)),
-                         'friction_record':scene.get('contact_friction')==({'ground_lateral_friction':params['friction'],'car_lateral_friction':1.0,'effective_ground_car_friction':params.get('effective_ground_car_friction'),'obstacle_lateral_friction':params['friction'],'restitution':0.0} if scene.get('entities') else {'ground_lateral_friction':params['friction'],'car_lateral_friction':1.0,'effective_ground_car_friction':params.get('effective_ground_car_friction'),'obstacle_lateral_friction':0.0}) and params.get('effective_ground_car_friction')==params['friction'] and params.get('car_lateral_friction')==1.0,
-                         'sleep_record':scene.get('physics_sleep')=={'car_activation_state':'enable_sleeping','activation_state_value':1} and params.get('car_sleep_activation_state')=='enable_sleeping',
+                         'friction_record':session.get('contact_friction')==({'ground_lateral_friction':params['friction'],'car_lateral_friction':1.0,'effective_ground_car_friction':params.get('effective_ground_car_friction'),'obstacle_lateral_friction':params['friction'],'restitution':0.0} if scene.get('entities') else {'ground_lateral_friction':params['friction'],'car_lateral_friction':1.0,'effective_ground_car_friction':params.get('effective_ground_car_friction'),'obstacle_lateral_friction':0.0}) and params.get('effective_ground_car_friction')==params['friction'] and params.get('car_lateral_friction')==1.0,
+                         'sleep_record':session.get('physics_sleep')=={'car_activation_state':'enable_sleeping','activation_state_value':1} and params.get('car_sleep_activation_state')=='enable_sleeping',
                          'initial_stationary':rows[0][:3]==box['initial_position_m'] and all(abs(v)<1e-12 for v in rows[0][7:13]),
                          'penetration':penetration<=limits['penetration_m'],
                          'final_rest':end_linear_speed<=limits['final_speed_m_s'] and (clearance(last) is not None and abs(clearance(last))<=limits['resting_height_error_m']),

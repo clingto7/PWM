@@ -92,6 +92,31 @@ class ObservationCliTest(unittest.TestCase):
             selection = json.loads((out/'selection.json').read_text())
             self.assertIsNone(selection['selected_index'])
             self.assertIn('near-tied', selection['reason'])
+
+    def test_far_background_does_not_make_floating_foreground_contact(self):
+        import numpy as np
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = root/'image.jpg'; Image.new('RGB', (256, 256)).save(image)
+            depth = np.full((1, 256, 256), 50, dtype=np.float32)
+            depth[0, 40:80, 90:130] = 3
+            depth[0, 80:86, 90:130] = 10
+            mask = np.zeros((1, 256, 256), dtype=bool); mask[0, 40:80, 90:130] = True
+            da3 = root/'depth'; da3.mkdir()
+            np.savez_compressed(da3/'prediction.npz', depth=depth, intrinsics=np.eye(3)[None])
+            (da3/'run.json').write_text(json.dumps({'is_metric': True}))
+            sam = root/'sam'; sam.mkdir()
+            np.savez_compressed(sam/'sam2_masks.npz', masks_256=mask,
+                points_xy=np.array([[110, 60]]), scores=np.array([.99]), selected=np.array([0]))
+            (sam/'run.json').write_text('{}')
+            out = root/'observation'
+            result = subprocess.run([sys.executable, str(CLI), str(image), str(out),
+                '--depth-source', str(da3), '--segmentation-source', str(sam)], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            selection = json.loads((out/'selection.json').read_text())
+            self.assertIn('contact', selection['reason'])
+            self.assertFalse(selection['candidates'][0]['contact']['supported'])
     def test_distant_selected_mask_island_does_not_expand_mesh_crop(self):
         import numpy as np
         from PIL import Image

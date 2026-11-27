@@ -91,7 +91,8 @@ def select_subject(masks_path, depth_path, image_path, output):
     valid = np.isfinite(depth) & (depth > 0)
     if not valid.any():
         raise ValueError('DA3 has no valid depth for subject selection')
-    near, far = np.percentile(depth[valid], [10, 90])
+    # The median excludes sky/far background from the foreground scale.
+    near, far = np.percentile(depth[valid], [10, 50])
     if far-near < 1e-6:
         near, far = float(depth[valid].min()), float(depth[valid].max())
     spread = max(float(far-near), 1e-6)
@@ -133,7 +134,7 @@ def select_subject(masks_path, depth_path, image_path, output):
         for other in candidates:
             if other['index'] == candidate['index'] or other['area_fraction'] < 1.5*candidate['area_fraction']:
                 continue
-            if other['score'] < candidate['score']-.08:
+            if other['score'] < candidate['score']-.15:
                 continue
             parent = masks[other['index']].astype(bool)
             if (mask & parent).sum()/max(int(mask.sum()), 1) >= .95:
@@ -150,10 +151,15 @@ def select_subject(masks_path, depth_path, image_path, output):
             for y in range(bottom+1, min(bottom+7, mask.shape[0])):
                 if valid[y, x] and not mask[y, x]:
                     support.append(float(depth[y, x]))
-        gap = abs(float(np.median(support))-candidate['median_depth'])/spread if support else None
-        contact = bool(support and gap <= .22)
+        support_depth = float(np.median(support)) if support else None
+        # Compare neighboring depths at the candidate's own scale. A far sky
+        # cannot turn a many-meter separation into apparent contact.
+        gap = abs(support_depth-candidate['median_depth'])/max(candidate['median_depth'], 1e-6) if support else None
+        contact = bool(support and gap <= .12)
         candidate['contact'] = {'supported':contact, 'sample_count':len(support),
-                                'relative_depth_gap':round(gap,6) if gap is not None else None}
+                                'support_median_depth':support_depth,
+                                'relative_depth_gap':round(gap,6) if gap is not None else None,
+                                'gap_scale':'candidate_median_depth'}
         candidate['final_score'] = round(candidate['score'] + (.12 if contact else 0), 6)
     eligible = sorted((c for c in distinct[:3] if c['contact']['supported']),
                       key=lambda c:c['final_score'], reverse=True)

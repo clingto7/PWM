@@ -224,3 +224,49 @@ in `selection.json`, the selected mask, a depth capability declaration, model
 identities, weights hashes, elapsed time, and hash-checked stage records. A
 relative-depth or missing-camera result fails before creating an accepted
 observation.
+
+## Cross-image automatic chain and evaluation protocol (#22)
+
+Run with one original screenshot and a JSON config:
+
+```sh
+python experiments/skeleton/automatic_chain.py run IMAGE.jpg config.json RUN_DIR
+python experiments/skeleton/automatic_chain.py check RUN_DIR
+python experiments/skeleton/automatic_chain.py replay RUN_DIR NEW_DIR --from-stage scene
+python experiments/skeleton/automatic_chain.py replay RUN_DIR RENDER_DIR --from-stage render --renderer raster
+```
+
+Config schema 1 accepts `renderer` (`raster` or `gaussian`), `seconds`,
+`mesh_provider` (`hunyuan3d21`), `use_weak_prior`, and optional saved model
+sources or local weight paths (`depth_source`, `segmentation_source`,
+`saved_mesh`, `da3_weights`, `sam_weights`, `mesh_weights`). Without saved
+sources, installed local weights are required. No download is attempted.
+`chain.json` records the requested configuration, input hashes, selected
+stage contracts and implementations, output hashes, wall-clock time and the
+stage of any failure. The checker reads only. Observation replay reuses checked
+observation; scene replay also reuses the checked scene; physics/render replay
+consumes the saved scene and trajectory through the renderer adapter. Renderer
+comparisons therefore use identical upstream hashes. Replay output must be
+separate and empty. The proxy adapter emits source and nearby-view depth and
+entity-ID PNGs plus MP4s; nearby views are geometry diagnostics.
+
+The cross-game pilot is pending source screenshots. Prepare six distinct game
+IDs: three development and three holdout, with at least five different eligible
+third-person scenes per game and varied dominant subject shapes. Eligibility
+requires a visible main support and one dominant controlled subject; decide
+eligibility before evaluating a run. Store image paths and scoring-only 2D
+annotations in a schema-1 dataset JSON accepted by `evaluation.py`. The
+annotation may cover subject mask/bbox, visible support, entities and source-view
+render comparisons; it must never enter the runner config. Mark every eligible
+scene, including failed runs. `evaluation.py` rejects undersized splits and
+counts each missing or failed run as a failure.
+
+Run development first. Before viewing holdout images, freeze the code revision,
+config hash, per-image failure conditions, five numeric thresholds (detection
+IoU minimum, geometry depth MAE maximum in metres, contact penetration maximum
+in metres, render IoU minimum, total seconds maximum), and aggregate success
+minimum in a versioned freeze JSON. Commit that freeze JSON before opening
+holdout. Use `evaluation.py DATASET --freeze FREEZE --split holdout` only after
+that commit. Report per-game and per-scene failures, all five metrics, and the
+eligible denominator. The current first-image gates are not cross-game
+thresholds; no values are frozen yet and no cross-game trial is claimed.

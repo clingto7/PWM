@@ -34,10 +34,7 @@ def write_json(path, value):
 
 
 def fit_settings(args):
-    classification = args.bundle/'classification.json' if args.bundle else None
-    return {'use_weak_prior': args.use_weak_prior,
-            'classification_artifact': 'classification.json' if classification and classification.is_file() else None,
-            'classification_sha256': digest(classification) if classification and classification.is_file() else None}
+    return {'fit_evidence': 'image_depth_support'}
 
 
 def build(args):
@@ -66,17 +63,17 @@ def build(args):
             'obstacle_min_cells': args.obstacle_min_cells,
             'obstacles_render_only': args.obstacles_render_only, **fit_settings(args)})
         expected_inputs = {f'inputs/{name}': digest(inputs[key]) for key, name in {'image':'input.jpg', 'da3':'prediction.npz', 'sam_car':'car_mask.png', 'hunyuan_mesh':'car_shape.glb'}.items()}
-        if fit_settings(args)['classification_sha256'] is not None:
-            expected_inputs['classification.json'] = fit_settings(args)['classification_sha256']
         if saved_scene['inputs'] != expected_inputs:
             raise ValueError('saved scene inputs differ from current bundle')
         for name in SceneArtifacts.NAMES:
             shutil.copyfile(saved/name, out/name)
-        for name in ('classification.json', 'fit_diagnostics.json', 'fit_visuals/before.png', 'fit_visuals/after.png'):
+        for name in ('fit_diagnostics.json', 'fit_visuals/before.png', 'fit_visuals/after.png',
+                     'fit_visuals/before_depth_error.png', 'fit_visuals/after_depth_error.png'):
             if (saved/name).is_file():
                 (out/name).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(saved/name, out/name)
-        reconstruction = SimpleNamespace(artifacts=SceneArtifacts(out), ground_time=0.0, scene_time=0.0)
+        reconstruction = SimpleNamespace(artifacts=SceneArtifacts(out), ground_time=0.0,
+                                         scene_time=0.0, writing_seconds=0.0)
     else:
         reconstruction=reconstruct(inputs,args,out,start)
     scene_artifacts=reconstruction.artifacts
@@ -140,6 +137,10 @@ def build(args):
     ballistic_visible=all(in_camera(row) for row in trajectories['ballistic'])
     outputs={str(path.relative_to(out)):digest(path) for path in sorted(out.rglob('*')) if path.is_file() and path.name != 'stage_status.json'}
     record={'schema':2,'inputs':{name:{'path':bundled[name],'sha256':hashes[name]} for name,path in inputs.items()},'outputs':outputs,'parameters':{'radius_m':args.radius,'angle_deg':args.angle,'cell_m':args.cell,'friction':args.friction,'car_lateral_friction':1.0,'effective_ground_car_friction':args.friction,'density_kg_m3':args.density,'derived_mass_kg':mass,'near_depth_m':args.near_depth,'ground_inlier_m':args.ground_inlier,'speed_m_s':args.speed,'obstacle_min_speed_m_s':args.obstacle_min_speed,'car_sleep_activation_state':'enable_sleeping','seconds':args.seconds,'physics_hz':240,'obstacle_height_m':args.obstacle_height,'obstacle_min_pixels':args.obstacle_min_pixels,'obstacle_min_cells':args.obstacle_min_cells,'obstacles_render_only':args.obstacles_render_only,'video_fps':30},'timings_s':{'ground_fit':ground_time,'scene_build':scene_time,'simulation_and_replay':sim_time,'render_and_video':render_time,'total':time.perf_counter()-start},'versions':{'python':platform.python_version(),'numpy':version('numpy'),'pillow':version('pillow'),'pybullet':version('pybullet'),'pybullet_api':api_version(),'ffmpeg':subprocess.check_output(['ffmpeg','-version'],text=True).splitlines()[0]},'measurements':{'max_contact_penetration_m':penetration,'replay_trajectory_identical':replay_identical,'final_position_m':rows[-1][:3],'final_velocity_m_s':rows[-1][7:10],'initial_projection_bbox_xyxy':actual_bbox,'initial_projection_mask_iou':projection_evidence['mask_iou'],'mesh_fit':mesh_fit,'road_false_positive_ratio':false_ratio,'road_false_positive_cells':road_false,'road_cells':road_count,'obstacle_component_sizes_cells':[component['cells'] for component in components],'obstacle_component_count':len(components)}}
+    record['timings_s'].update(scene.get('timings_s', {}))
+    record['timings_s']['writing'] = (reconstruction.writing_seconds +
+                                    mesh_fit.get('timings_s', {}).get('visual_writing', 0.0))
+    record['timings_s']['physical_trial'] = json.loads((out/'fit_trial.json').read_text())['seconds']
     record['stages'] = {
         'ground_fit_scene': {'inputs': hashes, 'outputs': {name:outputs[name] for name in ('scene.json','heightmap.npz','fitted_car.obj','car_collision_hull.obj','obstacles.npz')}, 'parameters': {'radius_m':args.radius,'angle_deg':args.angle,'cell_m':args.cell,'near_depth_m':args.near_depth,'ground_inlier_m':args.ground_inlier,'obstacle_height_m':args.obstacle_height,'obstacle_min_pixels':args.obstacle_min_pixels,'obstacle_min_cells':args.obstacle_min_cells,'obstacles_render_only':args.obstacles_render_only, **fit_settings(args)}, 'seconds':ground_time+scene_time},
         'simulation_replay': {'inputs': {'scene.json':outputs['scene.json'],'heightmap.npz':outputs['heightmap.npz'],'fitted_car.obj':outputs['fitted_car.obj'],'car_collision_hull.obj':outputs['car_collision_hull.obj'],'obstacles.npz':outputs['obstacles.npz']}, 'outputs': {name:outputs[name] for name in ('trajectory.json','replay_trajectory.json')}, 'parameters': {'density_kg_m3':args.density,'derived_mass_kg':mass,'friction':args.friction,'speed_m_s':args.speed,'obstacle_min_speed_m_s':args.obstacle_min_speed,'car_sleep_activation_state':'enable_sleeping','physics_hz':240,'obstacles_render_only':args.obstacles_render_only}, 'seconds':sim_time},
@@ -189,9 +190,10 @@ def build(args):
         mesh_seconds = source_mesh['timing_s']['total']
     record_stage(out, 'subject_mesh', [bundled['hunyuan_mesh']], [bundled['hunyuan_mesh']],
                  mesh_implementation, '1', mesh_parameters, mesh_seconds)
-    fit_files = [name for name in ('classification.json', 'fit_diagnostics.json', 'fit_visuals/before.png',
-                 'fit_visuals/after.png') if (out/name).is_file()]
-    record_stage(out, 'scene', input_files + (['classification.json'] if (out/'classification.json').is_file() else []),
+    fit_files = ['fit_diagnostics.json', 'fit_visuals/before.png',
+                 'fit_visuals/after.png', 'fit_visuals/before_depth_error.png',
+                 'fit_visuals/after_depth_error.png']
+    record_stage(out, 'scene', input_files,
                  [*SceneArtifacts.NAMES, *fit_files],
                  'first_image.reconstruct', '1', record['stages']['ground_fit_scene']['parameters'],
                  ground_time + scene_time)
@@ -202,7 +204,7 @@ def build(args):
                         'obstacle/trajectory.json', 'obstacle/replay_trajectory.json',
                         'contacts.json']
     record_stage(out, 'physics', [*SceneArtifacts.NAMES, 'impulses.json'],
-                 [*trajectory_files, 'fit_trial.json', 'physics_session.json'],
+                 [*trajectory_files, 'fit_trial.json', 'fit_trial.png', 'physics_session.json'],
                  'PyBulletSolver', str(api_version()),
                  record['stages']['simulation_replay']['parameters'], sim_time)
     render_files = [name for name in outputs if name.startswith(('depth/', 'instance_id/'))
@@ -227,8 +229,6 @@ def main(argv=None):
     parser.add_argument('output',type=Path)
     parser.add_argument('--bundle',type=Path,help='run bundle containing bundle.json and inputs/')
     parser.add_argument('--resume-scene',type=Path,help='reuse validated saved scene artifacts')
-    parser.add_argument('--use-weak-prior', action='store_true',
-                        help='select a frozen model-specific prior fit when classifier evidence qualifies')
     parser.add_argument('--radius',type=float,default=27)
     parser.add_argument('--angle',type=float,default=95)
     parser.add_argument('--cell',type=float,default=.5)
@@ -263,9 +263,8 @@ def main(argv=None):
         raise
 
 
-def main_with_arguments(output, bundle, seconds, use_weak_prior=False):
-    main([str(output), '--bundle', str(bundle), '--seconds', str(seconds)] +
-         (['--use-weak-prior'] if use_weak_prior else []))
+def main_with_arguments(output, bundle, seconds):
+    main([str(output), '--bundle', str(bundle), '--seconds', str(seconds)])
 
 
 if __name__ == '__main__':

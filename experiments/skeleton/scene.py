@@ -23,9 +23,11 @@ class Reconstruction:
     artifacts: object
     ground_time: float
     scene_time: float
+    writing_seconds: float
 
 
 def reconstruct(inputs, args, out, start):
+    write_seconds = 0.0
     d = np.load(inputs['da3'])
     depth = d['depth'][0]
     k = d['intrinsics'][0]
@@ -39,8 +41,10 @@ def reconstruct(inputs, args, out, start):
     yy = depth
     zz = -(ys - k[1, 2]) / k[1, 1] * depth
     eligible = ~car & np.isfinite(depth) & (depth > 2) & (depth < args.radius)
+    support_started = time.perf_counter()
     coeff, road, residual = select_support_plane(
         xx, yy, zz, eligible, car, args.ground_inlier)
+    support_fit_seconds = time.perf_counter()-support_started
     a, b, c = map(float, coeff)
     pitch = math.degrees(math.atan(b))
     # At the camera x=y=z=0, the fitted plane is c below the camera.
@@ -151,7 +155,9 @@ def reconstruct(inputs, args, out, start):
     road_count=int(road_cells.sum())
     road_false=int(np.count_nonzero(road_cells & (component_ids>0)))
     false_ratio=road_false/road_count if road_count else None
+    write_started = time.perf_counter()
     np.savez_compressed(out/'obstacles.npz',instance_id=component_ids,candidate=candidates.astype(np.uint8),road_cells=road_cells.astype(np.uint8),car_footprint=car_grid.astype(np.uint8))
+    write_seconds += time.perf_counter()-write_started
     for j in range(n-1):
         for i in range(n-1):
             q = j*n+i
@@ -159,7 +165,9 @@ def reconstruct(inputs, args, out, start):
                 indices.extend([q,q+1,q+n,q+1,q+n+1,q+n])
     if not indices:
         raise ValueError('empty scene sector')
+    write_started = time.perf_counter()
     np.savez_compressed(out/'heightmap.npz', z_m=grid_z.astype(np.float32), ground_z_m=grid_z.astype(np.float32), surface_z_m=tops.astype(np.float32), ground_z_exact_m=grid_z, surface_z_exact_m=tops, valid=valid_grid.astype(np.uint8), provenance=provenance, surface_provenance=surface_provenance, surface_votes=votes, sector=sector_grid.astype(np.uint8), support_evidence=support_codes, traversable=traversable.astype(np.uint8))
+    write_seconds += time.perf_counter()-write_started
     # The visible car is excluded from both mesh and collision generation; the fitted
     # plane spans its footprint, including pixels hidden by the original car.
     ys_car, xs_car = np.nonzero(car)
@@ -181,8 +189,10 @@ def reconstruct(inputs, args, out, start):
     if not 0 < car_depth <= args.radius:
         raise ValueError('car ground contact lies outside reconstruction sector')
     anchor_x,anchor_y,_ = world(np.array([ray_x*car_depth,car_depth,ray_z*car_depth]))
+    contact_started = time.perf_counter()
     contact_fit=contact_support_fit(xx, yy, zz, road,
         (ray_x*car_depth,car_depth,ray_z*car_depth))
+    contact_fit_seconds = time.perf_counter()-contact_started
     projected_width = (x1-x0+1)/k[0,0]*car_depth
     projected_height = (y1-y0+1)/k[1,1]*car_depth
     def projected_box_bbox(center,width,length,box_h):
@@ -221,21 +231,19 @@ def reconstruct(inputs, args, out, start):
                     best=(score,width,length,box_h,center,bbox)
     if best is None:
         raise ValueError('unable to project box into original camera')
-    category_evidence = None
-    if getattr(args, 'bundle', None) and (args.bundle/'classification.json').is_file():
-        from stage_contracts import check as check_stage
-        import shutil
-        check_stage(args.bundle, 'classification')
-        category_evidence = json.loads((args.bundle/'classification.json').read_text())
-        shutil.copyfile(args.bundle/'classification.json', out/'classification.json')
     fitted_mesh, mesh_fit = fit(inputs['hunyuan_mesh'], car, depth, k, right, forward, normal,
                                 flat_z, (anchor_x,anchor_y), car_depth, out/'fit_visuals',
-                                category_evidence, (grid_z, valid_grid, origin_x, args.cell),
-                                getattr(args, 'use_weak_prior', False))
+                                (grid_z, valid_grid, origin_x, args.cell))
+    write_started = time.perf_counter()
     write_json(out/'fit_diagnostics.json', mesh_fit)
+    write_seconds += time.perf_counter()-write_started
+    if not mesh_fit['fit_trusted']:
+        raise ValueError('untrusted image fit: see fit_diagnostics.json')
+    write_started = time.perf_counter()
     fitted_mesh.export(out/'fitted_car.obj')
     hull = fitted_mesh.convex_hull
     hull.export(out/'car_collision_hull.obj')
+    write_seconds += time.perf_counter()-write_started
     width,length,box_h = mesh_fit['size_m']
     car_pos = mesh_fit['position_m']
     yaw = mesh_fit['yaw_rad']
@@ -266,7 +274,13 @@ def reconstruct(inputs, args, out, start):
                           'collision_enabled': item['collision_enabled'], 'collider': 'obstacles.npz'}
                          for item in components]
     scene['obstacles']={'components':components,'component_count':len(components),'detection':{'height_above_plane_m':args.obstacle_height,'min_pixels_per_cell':args.obstacle_min_pixels,'min_cells_per_component':args.obstacle_min_cells,'connectivity':4,'source':'DA3 metric depth outside car mask, including non-road pixels'},'render_only':args.obstacles_render_only,'road_cells':road_count,'road_false_positive_cells':road_false,'road_false_positive_ratio':false_ratio,'car_footprint_obstacle_cells':int(np.count_nonzero(car_grid & (component_ids>0))),'instance_id_file':'obstacles.npz'}
+    scene['timings_s'] = {'support_plane_fit': support_fit_seconds,
+                          'support_contact_fit': contact_fit_seconds,
+                          'subject_scale_pose_search': mesh_fit['timings_s']['subject_scale_pose_search'],
+                          'candidate_rendering': mesh_fit['timings_s']['candidate_rendering']}
+    write_started = time.perf_counter()
     write_json(out/'scene.json', scene)
+    write_seconds += time.perf_counter()-write_started
     scene_time = time.perf_counter()-grid_start
     from artifacts import SceneArtifacts
-    return Reconstruction(SceneArtifacts(out),ground_time,scene_time)
+    return Reconstruction(SceneArtifacts(out),ground_time,scene_time,write_seconds)

@@ -98,7 +98,7 @@ obstacle ID across all rendered frames, reporting any missing IDs.
 
 The run command consumes the existing metric DA3 depth and camera, SAM-derived car mask, and original image. It fits the near-road plane, forms height-map cells from near metric depth back-projections and far ray/plane intersections, records per-cell provenance, fills the car footprint with that plane, fits the Hunyuan vehicle mesh from the car mask and depth, applies a 3 m/s sliding impulse, simulates in PyBullet, and renders fixed-camera depth and instance ID frames. The PNG depth values are millimetres for visible geometry; zero marks no entity or invalid depth. ID values are 0 for outside, 1 for ground, 2 for car, and 3 onward for obstacle components. Frame 0 is stationary before the impulse. `initial_projection.json` stores pixel-run evidence from that rendered frame and the resized SAM mask; the checker recomputes bbox/IoU and checks improvement against the published 6075606 baseline IoU of 0.3749. Two MP4 files provide contrast-scaled previews. `run.json` lists source and output hashes, per-stage input/output hashes, parameters, versions, timings, and simulation measurements. The checker only reads files.
 
-Issue #9 replaces the surrogate box with the local Hunyuan3D GLB. The fitter estimates uniform scale, ground-plane yaw, and translation from the SAM silhouette, DA3 car depth, and fitted ground contact. The source GLB and fitted OBJ are hashed in `run.json`; `scene.json` records the fitted pose, size and a post-fit comparison against BMW's published MINI Cooper S Convertible dimensions. The collision OBJ is the fitted mesh's convex hull. PyBullet uses the fitted mesh for visual rendering and the hull for collision at the same body pose. The checker compares the first rendered ID PNG to the recorded silhouette runs. The fit optimizes a projected convex silhouette, so the rendered mesh's measured IoU is the final image evidence.
+Issue #9 replaces the surrogate box with the local Hunyuan3D GLB. The fitter estimates uniform scale, ground-plane yaw, and translation from the SAM silhouette, DA3 depth, and fitted ground contact. The source GLB and fitted OBJ are hashed in `run.json`; `scene.json` records the fitted pose, size, and image-based residuals. The collision OBJ is the fitted mesh's convex hull. PyBullet uses the fitted mesh for visual rendering and the hull for collision at the same body pose. The checker compares the first rendered ID PNG to the recorded silhouette runs. The fit optimizes a projected convex silhouette, so the rendered mesh's measured IoU is the final image evidence.
 
 Current limitations: only trusted near-road pixels contribute local ground height variation; remaining cells use the fitted plane. Roadside obstacle surfaces use raw DA3 depth within the trusted radius, so far-depth compression can affect detection. Checker thresholds were backfilled after A800 run 6075606: 0.01 m penetration, 0.01 m rest-height error, 0.001 m/s final speed, 0.001 J/kg maximum step energy gain, and 0.01 m ground-fit RMS. Each is a simple bound above that first observation, not a statistical accuracy claim. Replay now starts in a fresh physics world. A800 validation is required before claiming this run passes the physical and visual acceptance criteria.
 
@@ -239,10 +239,16 @@ python experiments/skeleton/automatic_chain.py replay RUN_DIR RENDER_DIR --from-
 ```
 
 Config schema 1 accepts `renderer` (`raster` or `gaussian`), `seconds`,
-`mesh_provider` (`hunyuan3d21`), `use_weak_prior`, and optional saved model
+`mesh_provider` (`hunyuan3d21`) and optional saved model
 sources or local weight paths (`depth_source`, `segmentation_source`,
 `saved_mesh`, `da3_weights`, `sam_weights`, `mesh_weights`). Without saved
 sources, installed local weights are required. No download is attempted.
+
+Scenes created with the image/depth/support fit record `fit_evidence=image_depth_support`
+in their stage parameters. Scene resume requires those parameters to match;
+older scene contracts that recorded a category-prior choice are intentionally
+incompatible and must be rebuilt from saved observation inputs. Historical
+completed runs remain readable by the checker under their recorded contract.
 `chain.json` records the requested configuration, input hashes, selected
 stage contracts and implementations, output hashes, wall-clock time and the
 stage of any failure. The checker reads only and reruns the saved-run semantic gates for energy, contact, projection and replay; chain completion also requires those gates. Observation replay reuses checked depth and segmentation outputs and regenerates

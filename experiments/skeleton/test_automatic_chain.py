@@ -13,6 +13,14 @@ class AutomaticChainTest(unittest.TestCase):
     def invoke(self, *args):
         return subprocess.run([sys.executable, str(CLI), *map(str, args)], capture_output=True, text=True)
 
+    def test_category_prior_option_is_rejected_at_config_seam(self):
+        from automatic_chain import config_read
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp)/'config.json'
+            config.write_text(json.dumps({'schema': 1, 'use_weak_prior': True}))
+            with self.assertRaisesRegex(ValueError, 'unsupported configuration'):
+                config_read(config)
+
     def test_missing_image_is_counted_as_diagnostic_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

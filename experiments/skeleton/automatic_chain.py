@@ -23,7 +23,7 @@ def write(path, value):
 
 def config_read(path):
     data = json.loads(path.read_text())
-    allowed = {'schema', 'renderer', 'seconds', 'mesh_provider', 'use_weak_prior', *SOURCE_KEYS}
+    allowed = {'schema', 'renderer', 'seconds', 'mesh_provider', *SOURCE_KEYS}
     if not isinstance(data, dict) or set(data) - allowed or data.get('schema') != 1:
         raise ValueError('unsupported configuration schema or keys')
     if data.get('renderer', 'raster') not in ('raster', 'gaussian'):
@@ -36,8 +36,6 @@ def config_read(path):
     for key in SOURCE_KEYS:
         if key in data and not isinstance(data[key], str):
             raise ValueError(f'{key} must be a path string')
-    if not isinstance(data.get('use_weak_prior', False), bool):
-        raise ValueError('use_weak_prior must be boolean')
     return data
 
 
@@ -88,8 +86,6 @@ def run(image, config, output, resume_observation=None, resume_scene=None, resum
             command = [Path(__file__).with_name('first_image_pipeline.py'), destination/'run',
                        '--bundle', destination/'observation', '--resume-scene', source,
                        '--seconds', data.get('seconds', 5)]
-            if data.get('use_weak_prior'):
-                command.append('--use-weak-prior')
         else:
             if resume_perception:
                 source = resume_perception.resolve()
@@ -114,8 +110,6 @@ def run(image, config, output, resume_observation=None, resume_scene=None, resum
                 data.pop('saved_mesh', None)
             command = [Path(__file__).with_name('original_image_run.py'), image, output/'automatic',
                        '--seconds', data.get('seconds', 5), '--mesh-provider', data.get('mesh_provider', 'hunyuan3d21')]
-            if data.get('use_weak_prior'):
-                command.append('--use-weak-prior')
             for key in SOURCE_KEYS:
                 if key in data:
                     command.extend(['--' + key.replace('_', '-'), data[key]])

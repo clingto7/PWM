@@ -1,28 +1,7 @@
 """Fit the Hunyuan vehicle to the fixed DA3 camera and SAM silhouette."""
 import math
+import time
 import numpy as np
-
-# BMW Group MINI Cooper S Convertible, 03/2021 technical data (metres).
-REAL_SIZE_M = [1.727, 3.876, 1.415]  # width, length, height
-REAL_SIZE_SOURCE = 'https://www.press.bmwgroup.com/global/article/attachment/T0325437EN/471396'
-PRIOR_CONFIDENCE = .9
-PRIOR_WEIGHT = .025
-
-
-def eligible_prior(evidence):
-    return bool(evidence and evidence.get('class') == 'mini_cooper_s_convertible_2021'
-                and float(evidence.get('confidence', 0)) >= PRIOR_CONFIDENCE
-                and evidence.get('source') == 'classifier')
-
-
-def fit_choice_records(no_prior, prior, use_weak_prior):
-    """Keep the baseline record independent of the selected scene geometry."""
-    if use_weak_prior and prior is None:
-        raise ValueError('weak prior fit is unavailable')
-    return {'no_prior': {'scale': float(no_prior.x[0]),
-                         'pose': list(map(float, no_prior.x[1:])),
-                         'objective': float(no_prior.fun)},
-            'selected_fit': 'weak_prior' if use_weak_prior else 'no_prior'}
 
 
 def visible_fit_score(iou, depth_mae, contact_gap, observed_depth, anchor_depth):
@@ -34,6 +13,12 @@ def visible_fit_score(iou, depth_mae, contact_gap, observed_depth, anchor_depth)
 
 def support_gap(bottom, pose, ground_z, support):
     """Signed bottom-surface gap to reconstructed support cells under the pose."""
+    values = support_clearance(bottom, pose, ground_z, support)
+    return None if values is None else values[0]
+
+
+def support_clearance(bottom, pose, ground_z, support):
+    """Median and minimum vertex clearance over evidenced support cells."""
     grid, valid_grid, origin, cell = support
     scale, yaw, x, y = pose
     co, si = math.cos(yaw), math.sin(yaw)
@@ -47,7 +32,7 @@ def support_gap(bottom, pose, ground_z, support):
     if not np.any(observed):
         return None
     gaps = ground_z+bottom[inside][observed, 2]*scale-grid[iy[observed], ix[observed]]
-    return float(np.median(gaps))
+    return float(np.median(gaps)), float(np.min(gaps))
 
 
 def raster_depth(vertices, faces, k, right, forward, normal, scale, yaw, x, y, ground_z, shape):
@@ -87,10 +72,11 @@ def raster_depth(vertices, faces, k, right, forward, normal, scale, yaw, x, y, g
     return buffer
 
 
-def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, anchor_depth, diagnostic_dir=None, category_evidence=None, support=None, use_weak_prior=False):
+def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, anchor_depth, diagnostic_dir=None, support=None):
     import cv2
     import trimesh
     from scipy.optimize import differential_evolution
+    started = time.perf_counter()
     loaded = trimesh.load(mesh_path, force='scene')
     meshes = []
     for node in loaded.graph.nodes_geometry:
@@ -168,6 +154,7 @@ def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, 
                 + .03*metrics['support_contact_error_m']/max(anchor_depth,1))
     initial = [1., 0., anchor_xy[0], anchor_xy[1]]
     before = evidence(initial) or {'valid_projection': False}
+    search_started = time.perf_counter()
     result = differential_evolution(objective, bounds, seed=42, maxiter=35, popsize=6, polish=True, workers=1)
     # A vertex depth sample can prefer the rear-facing side of a mesh. Include
     # the original silhouette/median-depth optimum and rank both headings with
@@ -182,6 +169,8 @@ def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, 
         return 1-silhouette(pixels)+.12*depth_error+.03*anchor_error
     silhouette_result = differential_evolution(silhouette_objective, bounds,
         seed=42, maxiter=35, popsize=6, polish=True, workers=1)
+    search_seconds = time.perf_counter()-search_started
+    render_started = time.perf_counter()
     candidates = []
     for source, base in (('sampled_depth', result.x), ('silhouette_depth', silhouette_result.x)):
         for flip in (False, True):
@@ -197,34 +186,20 @@ def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, 
             score = visible_fit_score(iou, mae, contact_error(pose), observed_depth, anchor_depth)
             candidates.append({'source': source, 'flipped': flip, 'score': score,
                                'visible_iou': float(iou), 'visible_depth_mae_m': mae,
-                               'pose': pose})
+                               'pose': pose, 'rendered': rendered})
     winner = min(candidates, key=lambda item: item['score'])
+    render_seconds = time.perf_counter()-render_started
     result.x = winner['pose']
     result.fun = float(objective(result.x))
-    prior_enabled = eligible_prior(category_evidence)
-    prior_result = None
-    if prior_enabled:
-        def prior_objective(v):
-            dimensions = span * v[0]
-            penalty = float(np.mean(np.log(dimensions/REAL_SIZE_M)**2))
-            return objective(v) + PRIOR_WEIGHT * penalty
-        prior_result = differential_evolution(prior_objective, bounds, seed=42,
-                                               maxiter=35, popsize=6, polish=True, workers=1)
-    if use_weak_prior and not prior_enabled:
-        raise ValueError('weak size prior requested without eligible classifier evidence')
-    selected = prior_result if use_weak_prior else result
-    scale, yaw, x, y = map(float, selected.x)
+    scale, yaw, x, y = map(float, result.x)
     points = local * scale
     # Export local mesh in body coordinates; base pose puts wheel/contact plane on ground.
     points[:,2] -= (points[:,2].max()+points[:,2].min())/2
     # Swapping Y and Z reflects handedness; reverse winding for outward normals.
     fitted = trimesh.Trimesh(vertices=points, faces=mesh.faces[:, ::-1], process=False)
     size = (span*scale).tolist()
-    ratios = [size[i]/REAL_SIZE_M[i] for i in range(3)]
-    after = evidence(selected.x)
-    def rendered_metrics(pose, metrics):
-        rendered = raster_depth(local, mesh.faces, k, right, forward, normal,
-                                *pose, ground_z, mask.shape)
+    after = evidence(result.x) or {'valid_projection': False}
+    def rendered_metrics(rendered, pose, metrics):
         visible = np.isfinite(rendered)
         overlap = mask & visible & np.isfinite(depth) & (depth > 0)
         metrics['visible_depth_pixel_count'] = int(overlap.sum())
@@ -233,44 +208,63 @@ def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, 
         metrics['rendered_silhouette_iou'] = float(np.count_nonzero(mask & visible) /
             max(1, np.count_nonzero(mask | visible)))
         metrics['support_contact_gap_m'] = contact_error(pose)
-    if 'valid_projection' not in before:
-        rendered_metrics(initial, before)
-    rendered_metrics(selected.x, after)
+    before_rendered = raster_depth(local, mesh.faces, k, right, forward, normal,
+                                   *initial, ground_z, mask.shape)
+    rendered_metrics(before_rendered, initial, before)
+    rendered_metrics(winner['rendered'], result.x, after)
+    for pose, metrics in ((initial, before), (result.x, after)):
+        clearance = support_clearance(bottom, pose, ground_z, support) if support is not None else None
+        metrics['support_penetration_m'] = max(0.0, -clearance[1]) if clearance is not None else None
+    # Keep the established .80 first-image silhouette gate and the passive
+    # trial's initial contact limits; pixel depth has no historical error gate.
+    from gates import THRESHOLDS
+    gap = after['support_contact_gap_m']
+    trust_checks = {'silhouette': after['rendered_silhouette_iou'] >= THRESHOLDS['initial_mask_iou_min'],
+                    'pixel_depth': after['visible_depth_pixel_count'] > 0 and
+                                   after['visible_depth_mae_m'] is not None and
+                                   math.isfinite(after['visible_depth_mae_m']),
+                    'support_contact': gap is not None and -.10 <= gap <= .15 and
+                                       after['support_penetration_m'] is not None,
+                    'finite_score': math.isfinite(winner['score'])}
+    trusted = all(trust_checks.values())
+    visual_write_seconds = 0.0
     if diagnostic_dir is not None:
         diagnostic_dir.mkdir(exist_ok=True)
-        for name, pose in (('before', initial), ('after', selected.x)):
-            candidate = projected(sample, *pose)
+        for name, pose, rendered, metrics in (('before', initial, before_rendered, before),
+                                              ('after', result.x, winner['rendered'], after)):
             visual = np.zeros((h, w, 3), dtype=np.uint8)
             visual[mask, 1] = 200
-            if candidate is not None:
-                hull_pixels = cv2.convexHull(np.rint(candidate[0]).astype(np.int32))
-                outline = np.zeros((h, w), dtype=np.uint8)
-                cv2.fillConvexPoly(outline, hull_pixels, 1)
-                visual[outline.astype(bool), 2] = 200
-            cv2.imwrite(str(diagnostic_dir/f'{name}.png'), visual)
-    # No class classifier is part of the observation contract. Segmentation confidence
-    # cannot establish a semantic size class, so the frozen prior stays ineligible.
+            visual[np.isfinite(rendered), 2] = 200
+            gap_label = metrics['support_contact_gap_m']
+            cv2.putText(visual, f'gap {gap_label:.3f} m' if gap_label is not None else 'gap unknown',
+                        (6, 18), cv2.FONT_HERSHEY_SIMPLEX, .45, (255, 255, 255), 1)
+            write_started = time.perf_counter()
+            if not cv2.imwrite(str(diagnostic_dir/f'{name}.png'), visual):
+                raise OSError('failed to write silhouette diagnostic')
+            visual_write_seconds += time.perf_counter()-write_started
+            valid_depth = mask & np.isfinite(rendered) & np.isfinite(depth) & (depth > 0)
+            residual = np.zeros((h,w), dtype=np.uint8)
+            residual[valid_depth] = np.clip(np.abs(rendered[valid_depth]-depth[valid_depth])*50, 0, 255).astype(np.uint8)
+            write_started = time.perf_counter()
+            if not cv2.imwrite(str(diagnostic_dir/f'{name}_depth_error.png'), residual):
+                raise OSError('failed to write depth diagnostic')
+            visual_write_seconds += time.perf_counter()-write_started
     alternatives = [float(result.fun)]
     for factor in (.8, 1.2):
         trial = result.x.copy(); trial[0] *= factor
         alternatives.append(float(objective(trial)))
     uncertainty = {'method': 'objective profile at +/-20 percent scale',
                    'relative_scale_probe': [.8, 1., 1.2], 'objective': [alternatives[1], alternatives[0], alternatives[2]]}
-    choice_records = fit_choice_records(result, prior_result, use_weak_prior)
+    timings = {'subject_scale_pose_search': search_seconds,
+               'candidate_rendering': render_seconds,
+               'visual_writing': visual_write_seconds,
+               'fit_total': time.perf_counter()-started}
     return fitted, {'scale':scale, 'yaw_rad':yaw, 'position_m':[x,y,ground_z+size[2]/2],
-                    'size_m':size, 'size_check':{'reference_model':'MINI Cooper S Convertible (2021)',
-                    'reference_size_m':REAL_SIZE_M, 'source':REAL_SIZE_SOURCE,
-                    'fit_to_reference_ratio':ratios, 'reasonable':all(.7 <= r <= 1.3 for r in ratios)},
-                    'fit_objective':float(objective(selected.x)), 'observed_car_depth_m':observed_depth,
+                    'size_m':size, 'fit_trusted':trusted, 'trust_checks':trust_checks,
+                    'timings_s':timings,
+                    'fit_objective':float(result.fun), 'observed_car_depth_m':observed_depth,
                     'ground_contact_error_m':after['support_contact_gap_m'],
                     'diagnostics': {'before': before, 'after': after},
-                    'visible_candidate_ranking': [{key: value for key, value in candidate.items() if key != 'pose'}
+                    'visible_candidate_ranking': [{key: value for key, value in candidate.items() if key not in ('pose','rendered')}
                                                   for candidate in candidates],
-                    'scale_uncertainty': uncertainty,
-                    **choice_records,
-                    'weak_category_prior': {'eligible': prior_enabled, 'classification_evidence_threshold': PRIOR_CONFIDENCE,
-                                            'weight': PRIOR_WEIGHT, 'reason': None if prior_enabled else 'no eligible classifier evidence',
-                                            'result': None if prior_result is None else {'scale': float(prior_result.x[0]),
-                                            'pose': list(map(float, prior_result.x[1:])),
-                                            'image_objective': float(objective(prior_result.x)),
-                                            'regularized_objective': float(prior_result.fun)}}}
+                    'scale_uncertainty': uncertainty}

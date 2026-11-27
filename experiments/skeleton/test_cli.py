@@ -117,20 +117,20 @@ class CheckCliTest(unittest.TestCase):
             self.assertEqual(report['overall_decision'],'未设')
             self.assertEqual(report['timings_s']['total'],4.5)
 
-    def test_conclusion_preserves_failed_size_check_and_detects_tampering(self):
+    def test_conclusion_preserves_untrusted_fit_and_detects_tampering(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);rec=self.fixture(root)
             scene=json.loads((root/'scene.json').read_text())
-            scene['car']['mesh_fit']={'size_check':{'reasonable':False,'fit_to_reference_ratio':[.665,.601,.635]}}
+            scene['car']['mesh_fit']={'fit_trusted':False}
             (root/'scene.json').write_text(json.dumps(scene))
             rec['outputs']['scene.json']=hashlib.sha256((root/'scene.json').read_bytes()).hexdigest()
             rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
             (root/'run.json').write_text(json.dumps(rec))
             process=subprocess.run([sys.executable,str(CONCLUDE),str(root)],capture_output=True,text=True)
-            # Legacy fixture has no Hunyuan input, so size evidence is reported without mesh checks.
+            # Legacy fixture has no Hunyuan input, so fit evidence is reported without mesh checks.
             self.assertEqual(process.returncode,1,process.stderr)
             report=json.loads((root/'first_round_conclusion.json').read_text())
-            self.assertFalse(report['vehicle_size_check']['reasonable'])
+            self.assertFalse(report['fit_evidence']['trusted'])
             (root/'depth/0000.png').write_bytes(b'tampered')
             subprocess.run([sys.executable,str(CONCLUDE),str(root)],capture_output=True,text=True)
             report=json.loads((root/'first_round_conclusion.json').read_text())
@@ -674,7 +674,10 @@ class CheckCliTest(unittest.TestCase):
             im=Image.new('L',(4,4),0);im.putpixel((1,1),2);im.putpixel((2,1),2)
             im.save(root/'instance_id/0000.png')
             fit={'scale':1.0,'yaw_rad':0.0,'position_m':[0,0,.5], 'size_m':[1,2,1],
-                 'size_check':{'reasonable':True,'fit_to_reference_ratio':[1,1,1]}}
+                 'fit_trusted':True, 'diagnostics':{stage:{'rendered_silhouette_iou':.9,
+                     'visible_depth_mae_m':.1,'support_contact_gap_m':0,
+                     'support_penetration_m':0}
+                     for stage in ('before','after')}}
             scene=json.loads((root/'scene.json').read_text())
             scene['car'].update(mesh_fit=fit,collision_shape='convex hull of fitted Hunyuan mesh')
             (root/'scene.json').write_text(json.dumps(scene))
@@ -686,12 +689,27 @@ class CheckCliTest(unittest.TestCase):
             for name in ('scene.json','instance_id/0000.png','fitted_car.obj','car_collision_hull.obj'):
                 rec['outputs'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
             rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
+            rec['stages']['scene']['parameters']={'fit_evidence':'image_depth_support'}
             rec['stages']['simulation_replay']={'inputs':{name:rec['outputs'][name] for name in ('fitted_car.obj','car_collision_hull.obj')},'outputs':{}}
             rec['stages']['proxy_render_video']={'inputs':{'fitted_car.obj':rec['outputs']['fitted_car.obj']},'outputs':{}}
             (root/'run.json').write_text(json.dumps(rec))
             good=self.invoke(root)
             self.assertEqual(good.returncode,0,good.stderr+good.stdout)
+            self.assertTrue(json.loads(good.stdout)['checks']['fit_evidence_record'])
             self.assertTrue(json.loads(good.stdout)['checks']['rendered_silhouette_record'])
+            scene['car']['mesh_fit']['diagnostics']['after']['support_contact_gap_m']=.16
+            (root/'scene.json').write_text(json.dumps(scene))
+            rec['measurements']['mesh_fit']=scene['car']['mesh_fit']
+            rec['outputs']['scene.json']=hashlib.sha256((root/'scene.json').read_bytes()).hexdigest()
+            rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
+            (root/'run.json').write_text(json.dumps(rec))
+            self.assertFalse(json.loads(self.invoke(root).stdout)['checks']['fit_evidence_record'])
+            scene['car']['mesh_fit']['diagnostics']['after']['support_contact_gap_m']=0
+            (root/'scene.json').write_text(json.dumps(scene))
+            rec['measurements']['mesh_fit']=scene['car']['mesh_fit']
+            rec['outputs']['scene.json']=hashlib.sha256((root/'scene.json').read_bytes()).hexdigest()
+            rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
+            (root/'run.json').write_text(json.dumps(rec))
             del rec['stages']['simulation_replay']['inputs']['car_collision_hull.obj']
             (root/'run.json').write_text(json.dumps(rec))
             missing=self.invoke(root)
@@ -709,7 +727,10 @@ class CheckCliTest(unittest.TestCase):
             ids=np.array([[3,3,0,0],[1,2,2,0]],dtype=np.uint16)
             Image.fromarray(ids).save(root/'instance_id/0000.png')
             fit={'scale':1.0,'yaw_rad':0.0,'position_m':[0,0,.5], 'size_m':[1,2,1],
-                 'size_check':{'reasonable':True,'fit_to_reference_ratio':[1,1,1]}}
+                 'fit_trusted':True, 'diagnostics':{stage:{'rendered_silhouette_iou':.9,
+                     'visible_depth_mae_m':.1,'support_contact_gap_m':0,
+                     'support_penetration_m':0}
+                     for stage in ('before','after')}}
             scene=json.loads((root/'scene.json').read_text())
             scene['car'].update(mesh_fit=fit,collision_shape='convex hull of fitted Hunyuan mesh')
             (root/'scene.json').write_text(json.dumps(scene))

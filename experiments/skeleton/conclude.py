@@ -55,7 +55,6 @@ def conclude(root, thresholds=None):
     solver_decision = '未设' if not cases else (sound and checks.get('impulse_cases') is True and
                                                 all(checks.get(k) is True for k in ('penetration', 'resting_height', 'final_speed', 'no_energy_gain', 'replay')))
     fit = scene.get('car', {}).get('mesh_fit', {})
-    size = fit.get('size_check', {})
     conditions = {
         'vehicle_silhouette': {'iou': projection, 'threshold_min': limits['initial_mask_iou_min'],
                                'decision': decision(projection, limits['initial_mask_iou_min'], minimum=True, evidence=sound and checks.get('initial_projection_record') is True)},
@@ -71,8 +70,8 @@ def conclude(root, thresholds=None):
     decisions = [entry['decision'] for entry in conditions.values()]
     report = {'schema': 1, 'source_run_sha256': hashlib.sha256((root / 'run.json').read_bytes()).hexdigest(),
               'source_integrity_passed': sound, 'pipeline_checker_passed': checked['passed'], 'conditions': conditions,
-              'vehicle_size_check': {'reasonable': size.get('reasonable', '未设'), 'fit_to_reference_ratio': size.get('fit_to_reference_ratio'),
-                                     'note': '车型尺寸核对独立于四条失败条件'},
+              'fit_evidence': {'trusted': fit.get('fit_trusted', '未设'),
+                               'diagnostics': fit.get('diagnostics')},
               'timings_s': {'total': '未设', **record.get('timings_s', {})},
               'overall_decision': False if checked['passed'] is not True else (True if all(v is True for v in decisions) else ('未设' if '未设' in decisions and all(v is True or v == '未设' for v in decisions) else False))}
     # The digest covers every report field except the digest itself.

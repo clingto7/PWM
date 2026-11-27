@@ -139,14 +139,31 @@ def check(root):
             for stage,names in required.items() for name in names)
         checks['mesh_record']=all(name in record['outputs'] for name in ('fitted_car.obj','car_collision_hull.obj')) and fit==m['mesh_fit'] and all(math.isfinite(v) and v>0 for v in size) and math.isfinite(fit['scale']) and fit['scale']>0 and box['collision_shape']=='convex hull of fitted Hunyuan mesh'
         checks['mesh_ground_contact']=abs(fit['position_m'][2]-size[2]/2-surface)<.01
-        checks['size_reasonableness_record']=fit['size_check']['reasonable']==all(.7<=v<=1.3 for v in fit['size_check']['fit_to_reference_ratio'])
+        image_fit = stages.get('ground_fit_scene', {}).get('parameters', {}).get('fit_evidence') == 'image_depth_support'
+        if not image_fit:
+            image_fit = stages.get('scene', {}).get('parameters', {}).get('fit_evidence') == 'image_depth_support'
+        if image_fit:
+            diagnostics = fit.get('diagnostics', {})
+            before, after = diagnostics.get('before', {}), diagnostics.get('after', {})
+            gap = after.get('support_contact_gap_m')
+            penetration = after.get('support_penetration_m')
+            mae = after.get('visible_depth_mae_m')
+            checks['fit_evidence_record'] = (fit.get('fit_trusted') is True and
+                all(entry.get('rendered_silhouette_iou') is not None and
+                    entry.get('visible_depth_mae_m') is not None and
+                    entry.get('support_contact_gap_m') is not None
+                    for entry in (before, after)) and
+                after['rendered_silhouette_iou'] >= THRESHOLDS['initial_mask_iou_min'] and
+                isinstance(mae, (int, float)) and math.isfinite(mae) and
+                isinstance(gap, (int, float)) and -.10 <= gap <= .15 and
+                isinstance(penetration, (int, float)) and math.isfinite(penetration))
         from PIL import Image
         image=Image.open(root/'instance_id/0000.png')
         checks['rendered_silhouette_record']={(y,x) for y in range(image.height) for x in range(image.width) if image.getpixel((x,y))==2}==rendered
         metrics['mesh_size_m']=size
         metrics['mesh_fit_scale']=fit['scale']
         metrics['mesh_fit_yaw_rad']=fit['yaw_rad']
-        metrics['mesh_size_reasonable']=fit['size_check']['reasonable']
+        metrics['fit_trusted']=fit.get('fit_trusted')
     if 'obstacles' in scene:
         stages=record.get('stages',{})
         checks['obstacle_stage_provenance']=all(

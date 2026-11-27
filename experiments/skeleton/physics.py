@@ -149,8 +149,20 @@ def solve_saved_scene(out, args, scene, component_ids, tops, actions=None):
     try:
         solver=PyBulletSolver(p)
         ground, body, obstacle_bodies = solver.create_world(geometry,args,out)
+        trial_started = time.perf_counter()
         trial = solver.trial_without_impulse(body, ground)
+        trial['seconds'] = time.perf_counter()-trial_started
         write_json(out/'fit_trial.json', trial)
+        from PIL import Image, ImageDraw
+        visual = Image.new('RGB', (360, 100), 'white')
+        draw = ImageDraw.Draw(visual)
+        for row, (label, value) in enumerate((('gap', trial['initial_support_gap_m']),
+                                               ('penetration', trial['max_penetration_m']),
+                                               ('drift', trial['passive_drift_m']))):
+            draw.text((4, 8+row*30), f'{label}: {value:.4f} m', fill='black')
+            draw.rectangle((145, 10+row*30, 145+min(200, int(abs(value)*400)) if math.isfinite(value) else 345, 24+row*30),
+                           fill='red' if not trial['trusted'] else 'green')
+        visual.save(out/'fit_trial.png')
         if not trial['trusted']:
             raise ValueError('untrusted initial subject fit: see fit_trial.json')
         p.disconnect(client); client=p.connect(p.DIRECT)

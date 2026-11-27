@@ -24,6 +24,14 @@ def check(root):
     integrity={}
     if session is not scene:
         integrity['physics_session_scene'] = integrity_session_hash
+        effective_mass = session.get('mass_kg')
+        scene_mass = scene.get('car', {}).get('mass_kg')
+        recorded_mass = record.get('parameters', {}).get('derived_mass_kg', scene_mass)
+        integrity['physics_session_mass'] = (isinstance(effective_mass, (int, float))
+            and not isinstance(effective_mass, bool) and math.isfinite(effective_mass)
+            and effective_mass > 0 and scene_mass is not None and recorded_mass is not None
+            and math.isclose(effective_mass, scene_mass, rel_tol=1e-9)
+            and math.isclose(effective_mass, recorded_mass, rel_tol=1e-9))
     for name,expected in record['outputs'].items():
         path=(root/name).resolve()
         integrity[name]=path.is_relative_to(root) and path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest()==expected

@@ -24,13 +24,27 @@ class CheckCliTest(unittest.TestCase):
             image.write_bytes(b'original observation')
             rec['inputs']['image']={'path':'inputs/input.jpg',
                                     'sha256':hashlib.sha256(image.read_bytes()).hexdigest()}
-            session={'schema':1, 'scene_sha256':rec['outputs']['scene.json']}
+            scene=json.loads((root/'scene.json').read_text())
+            scene['car']['mass_kg']=1200.0
+            (root/'scene.json').write_text(json.dumps(scene))
+            rec['outputs']['scene.json']=hashlib.sha256((root/'scene.json').read_bytes()).hexdigest()
+            rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
+            session={'schema':1, 'scene_sha256':rec['outputs']['scene.json'], 'mass_kg':1200.0}
             (root/'physics_session.json').write_text(json.dumps(session))
             rec['outputs']['physics_session.json']=hashlib.sha256((root/'physics_session.json').read_bytes()).hexdigest()
             (root/'run.json').write_text(json.dumps(rec))
             valid=json.loads(self.invoke(root).stdout)
             self.assertTrue(valid['integrity']['physics_session_scene'])
+            self.assertTrue(valid['integrity']['physics_session_mass'])
             self.assertTrue(valid['integrity']['input:image'])
+            session['mass_kg']=900.0
+            (root/'physics_session.json').write_text(json.dumps(session))
+            rec['outputs']['physics_session.json']=hashlib.sha256((root/'physics_session.json').read_bytes()).hexdigest()
+            (root/'run.json').write_text(json.dumps(rec))
+            bad=json.loads(self.invoke(root).stdout)
+            self.assertFalse(bad['integrity']['physics_session_mass'])
+            self.assertFalse(bad['checks']['hashes'])
+            session['mass_kg']=1200.0
             session['scene_sha256']='0'*64
             (root/'physics_session.json').write_text(json.dumps(session))
             rec['outputs']['physics_session.json']=hashlib.sha256((root/'physics_session.json').read_bytes()).hexdigest()

@@ -156,6 +156,9 @@ def solve_saved_scene(out, args, scene, component_ids, tops, actions=None):
         p.disconnect(client); client=p.connect(p.DIRECT)
         ground, body, obstacle_bodies = solver.create_world(geometry,args,out)
         inertia_diagonal=list(p.getDynamicsInfo(body,-1)[2])
+        effective_mass=float(p.getDynamicsInfo(body,-1)[0])
+        if not math.isclose(effective_mass, mass, rel_tol=1e-9):
+            raise RuntimeError('engine mass disagrees with saved scene')
         shape_counts={instance_id:len(p.getCollisionShapeData(obstacle_body,-1)) for obstacle_body,instance_id in obstacle_bodies.items()}
         for component in components:
             count=shape_counts[component['instance_id']]
@@ -163,6 +166,7 @@ def solve_saved_scene(out, args, scene, component_ids, tops, actions=None):
                 raise RuntimeError('obstacle collision shape disagrees with fallback mode')
         session={'schema':1, 'solver':'PyBulletSolver',
                  'scene_sha256':hashlib.sha256((out/'scene.json').read_bytes()).hexdigest(),
+                 'mass_kg':effective_mass,
                  'obstacle_collision_shape_counts_by_id':shape_counts}
         session['contact_friction']={'ground_lateral_friction':args.friction,'car_lateral_friction':1.0,'effective_ground_car_friction':args.friction,'obstacle_lateral_friction':args.friction,'restitution':0.0}
         session['physics_sleep']={'car_activation_state':'enable_sleeping','activation_state_value':p.ACTIVATION_STATE_ENABLE_SLEEPING}

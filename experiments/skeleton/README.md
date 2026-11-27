@@ -47,9 +47,11 @@ ground uses the nominal coefficient and the car uses 1.0, so the effective
 coast coefficient matches the recorded nominal value. The obstacle impulse
 is sized from estimated distance to first contact plus a small arrival speed,
 avoiding the large overspeed seen in the first A800 measurement.
-The default obstacle minimum launch speed is 6 m/s, independently of the
-3 m/s coast and ballistic speed; this was the lowest measured speed that
-contacted the selected obstacle in the second A800 diagnostic. PyBullet's
+The obstacle launch speed is 1.15 times the greater of the 6 m/s configured
+minimum and the point-mass contact estimate, capped at 15 m/s; its effective
+floor is 6.9 m/s, independently of the 3 m/s coast and ballistic speed. The
+6 m/s minimum was the lowest speed observed to contact the selected obstacle
+in the second A800 diagnostic. PyBullet's
 normal rigid-body sleeping is explicitly enabled and recorded for the car so
 terminal contact jitter can settle without editing trajectory velocities.
 The existing 0.001 m/s final linear-speed gate remains unchanged.
@@ -224,3 +226,83 @@ in `selection.json`, the selected mask, a depth capability declaration, model
 identities, weights hashes, elapsed time, and hash-checked stage records. A
 relative-depth or missing-camera result fails before creating an accepted
 observation.
+
+## Cross-image automatic chain and evaluation protocol (#22)
+
+Run with one original screenshot and a JSON config:
+
+```sh
+python experiments/skeleton/automatic_chain.py run IMAGE.jpg config.json RUN_DIR
+python experiments/skeleton/automatic_chain.py check RUN_DIR
+python experiments/skeleton/automatic_chain.py replay RUN_DIR NEW_DIR --from-stage scene
+python experiments/skeleton/automatic_chain.py replay RUN_DIR RENDER_DIR --from-stage render --renderer raster
+```
+
+Config schema 1 accepts `renderer` (`raster` or `gaussian`), `seconds`,
+`mesh_provider` (`hunyuan3d21`), `use_weak_prior`, and optional saved model
+sources or local weight paths (`depth_source`, `segmentation_source`,
+`saved_mesh`, `da3_weights`, `sam_weights`, `mesh_weights`). Without saved
+sources, installed local weights are required. No download is attempted.
+`chain.json` records the requested configuration, input hashes, selected
+stage contracts and implementations, output hashes, wall-clock time and the
+stage of any failure. The checker reads only and reruns the saved-run semantic gates for energy, contact, projection and replay; chain completion also requires those gates. Observation replay reuses checked depth and segmentation outputs and regenerates
+the mesh with local weights; mesh replay reuses the checked mesh and reruns scene
+fitting onward; scene replay also reuses the checked scene; physics/render replay
+consumes the saved scene and trajectory through the renderer adapter. Renderer
+comparisons therefore use identical upstream hashes. Replay output must be
+separate and empty. The proxy adapter emits source and nearby-view depth and
+entity-ID PNGs plus MP4s; nearby views are geometry diagnostics.
+
+The cross-game pilot is pending source screenshots. Prepare six distinct game
+IDs: three development and three holdout, with at least five different eligible
+third-person scenes per game and varied dominant subject shapes. Eligibility
+requires a visible main support and one dominant controlled subject; decide
+eligibility before evaluating a run. Store image paths and scoring-only 2D
+annotations in a schema-1 dataset JSON accepted by `evaluation.py`. The
+annotation may cover subject mask/bbox, visible support, entities and source-view
+render comparisons; it must never enter the runner config. Mark every eligible
+scene, including failed runs. `evaluation.py` rejects undersized splits and
+counts each missing or failed run as a failure.
+
+Run development first. Before viewing holdout images, freeze the code revision,
+config hash, per-image failure conditions, five numeric thresholds (detection
+IoU minimum, geometry contact-fit RMS maximum in metres, contact penetration maximum
+in metres, render IoU minimum, total seconds maximum), and aggregate success
+minimum in a versioned freeze JSON. Commit that freeze JSON before opening
+holdout. Use `evaluation.py DATASET --freeze FREEZE --split holdout` only after
+that commit. Report per-game and per-scene failures, all five metrics, and the
+eligible denominator. The current first-image gates are not cross-game
+thresholds; no values are frozen yet and no cross-game trial is claimed.
+
+For each completed run, score the saved source-view projection against an
+independent scoring-only subject annotation (`schema: 1`,
+`subject_runs_y_x0_x1`: `[y,x0,x1]` pixel spans):
+
+```sh
+python experiments/skeleton/evaluation.py --run RUN_DIR --annotation SUBJECT.json --output SCORE_DIR
+```
+
+This writes `evaluation.json` with detection/render IoU, saved semantic-check
+contact-fit RMS and maximum penetration, total wall time, and hashes for the
+image, config, chain and annotation plus the code revision. The dataset points
+to each score directory. Seal the freeze JSON by setting `sealed_sha256` to
+the SHA-256 of canonical sorted compact JSON without that field, and pin that
+digest in dataset `freeze_sha256`. The holdout scorer rejects an altered seal,
+revision/config mismatch, image/annotation mismatch, duplicate available image
+content within a game, or a stale/invalid saved chain. Missing runs remain
+failures in the eligible denominator. Commit the seal and
+dataset pin before holdout inspection.
+
+For an opt-in fixed-upstream renderer comparison, run:
+
+```sh
+python experiments/skeleton/automatic_chain.py compare RUN_DIR COMPARE_DIR --alternate-renderer gaussian
+```
+
+The command checks the saved chain, renders the alternate proxy from the same
+saved scene and trajectory, and writes `comparison.json` with both adapter
+manifest hashes, exact matching upstream SHA-256 maps, timings, views and
+available diagnostics. A mismatch or renderer failure leaves a diagnostic
+failure manifest. The normal original-image run renders only the selected
+renderer. Gaussian comparison requires the pinned GPU environment; no
+cross-game or A800 Gaussian result is asserted here.

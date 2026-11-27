@@ -34,6 +34,24 @@ if __name__ == '__main__':
     unittest.main()
 
 class ResumeAndContactCliTest(unittest.TestCase):
+    def test_saved_scene_rejects_prior_choice_and_classifier_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root/'scene.json').write_text('{}')
+            (root/'classification.json').write_text('{"class":"mini_cooper_s_convertible_2021"}')
+            from stage_contracts import digest
+            first_hash = digest(root/'classification.json')
+            from stage_contracts import record, validate_resume
+            record(root, 'scene', ['classification.json'], ['scene.json'], 'fit', '1',
+                   {'use_weak_prior': False, 'classification_artifact': 'classification.json',
+                    'classification_sha256': first_hash}, 0)
+            with self.assertRaisesRegex(ValueError, 'use_weak_prior'):
+                validate_resume(root, {'use_weak_prior': True,
+                    'classification_artifact': 'classification.json', 'classification_sha256': first_hash})
+            with self.assertRaisesRegex(ValueError, 'classification_sha256'):
+                validate_resume(root, {'use_weak_prior': False,
+                    'classification_artifact': 'classification.json', 'classification_sha256': 'different'})
+
     def test_saved_scene_rejects_changed_geometry_settings(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

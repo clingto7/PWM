@@ -106,7 +106,8 @@ class LiveSession:
         return [*pos, *quat, *vel, *omega]
 
     def step(self, delta_velocity):
-        if len(delta_velocity) != 3 or not all(isinstance(v,(int,float)) and math.isfinite(v) for v in delta_velocity):
+        if (not isinstance(delta_velocity, (list, tuple)) or len(delta_velocity) != 3
+                or not all(isinstance(v,(int,float)) and math.isfinite(v) for v in delta_velocity)):
             raise ValueError('control must be a finite 3D delta velocity')
         waiting = time.perf_counter()-self.last_return
         p = self.source.p; body = self.source.body

@@ -89,4 +89,6 @@ class LiveSessionTest(unittest.TestCase):
                              save_frame=lambda f,p: p.write_text('frame')) as session:
                 with self.assertRaises(ValueError):
                     session.step([float('nan'), 0, 0])
+                with self.assertRaises(ValueError):
+                    session.step(1)
                 self.assertEqual(bullet.steps, 0)

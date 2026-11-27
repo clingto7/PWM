@@ -63,7 +63,7 @@ class PyBulletSolver:
                 'max_penetration_m': penetration, 'passive_drift_m': drift,
                 'steps': steps, 'thresholds_m': {'gap': .15, 'penetration': .10, 'drift': .25}}
 
-    def create_world(self, geometry, args, out, contact_erp=0.1):
+    def create_world(self, geometry, args, out, solver_parameters=None):
         p=self.p
         vertices=geometry.vertices; indices=geometry.indices
         components=geometry.components; obstacle_meshes=geometry.obstacle_meshes
@@ -75,8 +75,10 @@ class PyBulletSolver:
         car_pos=geometry.car_pos; car_orientation=geometry.car_orientation
         p.setGravity(0,0,-9.81)
         p.setTimeStep(1/240)
-        p.setPhysicsEngineParameter(fixedTimeStep=1/240, numSolverIterations=100,
-                                    deterministicOverlappingPairs=1, contactERP=contact_erp)
+        parameters = {'fixedTimeStep':1/240, 'numSolverIterations':100,
+                      'deterministicOverlappingPairs':1}
+        parameters.update({'contactERP':0.1} if solver_parameters is None else solver_parameters)
+        p.setPhysicsEngineParameter(**parameters)
         ground_collision = p.createCollisionShape(p.GEOM_MESH, vertices=vertices, indices=indices, flags=p.GEOM_FORCE_CONCAVE_TRIMESH)
         ground_visual = p.createVisualShape(p.GEOM_MESH, vertices=vertices, indices=indices, rgbaColor=[.5,.5,.5,1])
         ground = p.createMultiBody(0, ground_collision, ground_visual)

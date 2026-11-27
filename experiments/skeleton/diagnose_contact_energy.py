@@ -30,8 +30,7 @@ def run_case(geometry, settings, velocity, seconds, variant):
     try:
         solver = PyBulletSolver(p)
         ground, body, _ = solver.create_world(geometry, settings, Path(settings.root),
-                                               contact_erp=variant['parameters']['contactERP'])
-        p.setPhysicsEngineParameter(**variant['parameters'])
+                                               solver_parameters=variant['parameters'])
         effective_parameters = p.getPhysicsEngineParameters()
         inertia = p.getDynamicsInfo(body, -1)[2]
         mass = geometry.mass
@@ -81,14 +80,22 @@ def main():
     saved_energy = [specific_energy(row, inertia, geometry.mass) for row in saved_rows]
     saved_gain, saved_frame = max((saved_energy[i]-saved_energy[i-1], i)
                                   for i in range(2, len(saved_energy)))
+    metadata = geometry.scene.get('physics_solver') or {}
+    if 'contact_erp' in metadata:
+        baseline_parameters = {'contactERP': metadata['contact_erp']}
+        if metadata.get('split_impulse') is True:
+            baseline_parameters.update(useSplitImpulse=1,
+                splitImpulsePenetrationThreshold=metadata['split_impulse_penetration_threshold_m'])
+    else:
+        # The integration #19 world left contact ERP and split settings unset.
+        baseline_parameters = {}
     variants = [
-        {'name': 'unsplit', 'parameters': {'useSplitImpulse': 0, 'contactERP': 0.2}},
+        {'name': 'saved_baseline', 'parameters': baseline_parameters},
+        {'name': 'unsplit', 'parameters': {'useSplitImpulse': 0}},
         {'name': 'current_split', 'parameters': {'useSplitImpulse': 1,
-                                                'splitImpulsePenetrationThreshold': 0.0,
-                                                'contactERP': 0.2}},
+                                                'splitImpulsePenetrationThreshold': 0.0}},
         {'name': 'split_default_threshold', 'parameters': {'useSplitImpulse': 1,
-                                                           'splitImpulsePenetrationThreshold': -0.04,
-                                                           'contactERP': 0.2}},
+                                                           'splitImpulsePenetrationThreshold': -0.04}},
         {'name': 'split_low_erp', 'parameters': {'useSplitImpulse': 1,
                                                'splitImpulsePenetrationThreshold': 0.0,
                                                'contactERP': 0.1}},
@@ -98,14 +105,14 @@ def main():
     ]
     results = [run_case(geometry, settings, velocity, params['seconds'], v)
                for v in variants]
-    current = next(r for r in results if r['variant'] == 'current_split')
-    reproduced = abs(current['max_step_specific_energy_gain_j_kg']-saved_gain) <= 1e-9
+    baseline = results[0]
+    reproduced = abs(baseline['max_step_specific_energy_gain_j_kg']-saved_gain) <= 1e-9
     print(json.dumps({'saved_baseline_gain_j_kg': saved_gain,
                       'saved_baseline_peak_frame': saved_frame,
-                      'current_split_reproduces_saved_baseline': reproduced,
+                      'saved_baseline_reproduced': reproduced,
                       'variants': results}, indent=2))
     if not reproduced:
-        raise SystemExit('current solver settings did not reproduce saved baseline; do not interpret sweep')
+        raise SystemExit('saved solver settings did not reproduce baseline; do not interpret sweep')
 
 
 if __name__ == '__main__':

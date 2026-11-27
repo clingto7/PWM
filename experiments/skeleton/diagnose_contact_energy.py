@@ -6,7 +6,6 @@ The saved scene is read only; results are printed as JSON.
 """
 import argparse
 import json
-import math
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -32,6 +31,7 @@ def run_case(geometry, settings, velocity, seconds, variant):
         solver = PyBulletSolver(p)
         ground, body, _ = solver.create_world(geometry, settings, Path(settings.root))
         p.setPhysicsEngineParameter(**variant['parameters'])
+        effective_parameters = p.getPhysicsEngineParameters()
         inertia = p.getDynamicsInfo(body, -1)[2]
         mass = geometry.mass
         p.resetBaseVelocity(body, linearVelocity=velocity)
@@ -50,6 +50,7 @@ def run_case(geometry, settings, velocity, seconds, variant):
         gain, frame = max(gains)
         before, after = rows[frame-1], rows[frame]
         return {'variant': variant['name'], 'parameters': variant['parameters'],
+                'effective_engine_parameters': effective_parameters,
                 'max_step_specific_energy_gain_j_kg': max(0., gain),
                 'peak_frame': frame, 'peak_time_s': frame/solver.hz,
                 'before': {'z_m': before[1][2], 'linear_velocity_m_s': before[1][7:10],
@@ -74,6 +75,11 @@ def main():
     settings = SimpleNamespace(root=str(root), friction=params['friction'],
                                radius=params['radius_m'])
     velocity = impulses['ballistic']['delta_velocity_m_s']
+    saved_rows = json.loads((root/'ballistic'/'trajectory.json').read_text())
+    inertia = run['impulse_cases']['ballistic']['inertia_diagonal_kg_m2']
+    saved_energy = [specific_energy(row, inertia, geometry.mass) for row in saved_rows]
+    saved_gain, saved_frame = max((saved_energy[i]-saved_energy[i-1], i)
+                                  for i in range(2, len(saved_energy)))
     variants = [
         {'name': 'unsplit', 'parameters': {'useSplitImpulse': 0}},
         {'name': 'current_split', 'parameters': {'useSplitImpulse': 1,
@@ -84,8 +90,16 @@ def main():
                                                'splitImpulsePenetrationThreshold': 0.0,
                                                'contactERP': 0.1}},
     ]
-    print(json.dumps([run_case(geometry, settings, velocity, params['seconds'], v)
-                      for v in variants], indent=2))
+    results = [run_case(geometry, settings, velocity, params['seconds'], v)
+               for v in variants]
+    current = next(r for r in results if r['variant'] == 'current_split')
+    reproduced = abs(current['max_step_specific_energy_gain_j_kg']-saved_gain) <= 1e-9
+    print(json.dumps({'saved_baseline_gain_j_kg': saved_gain,
+                      'saved_baseline_peak_frame': saved_frame,
+                      'current_split_reproduces_saved_baseline': reproduced,
+                      'variants': results}, indent=2))
+    if not reproduced:
+        raise SystemExit('current solver settings did not reproduce saved baseline; do not interpret sweep')
 
 
 if __name__ == '__main__':

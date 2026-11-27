@@ -16,7 +16,7 @@ from car_fit import fit
 from bundle import sources, copy_inputs, revision
 from raster import RasterRenderer
 from raster_replay import render_saved
-from physics import PyBulletSolver, api_version
+from physics import api_version
 from artifacts import SceneArtifacts
 from scene import reconstruct
 from first_image_stages import render_saved_scene

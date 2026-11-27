@@ -5,10 +5,9 @@ import subprocess
 import time
 
 import numpy as np
-import pybullet as p
 
 from artifacts import SceneArtifacts
-from physics import PyBulletSolver
+from physics import BulletRasterSession
 from raster import RasterRenderer
 
 
@@ -18,26 +17,21 @@ def write_json(path, value):
 
 
 def render_saved_scene(out, args, scene, car, target, rows):
-    geometry = SceneArtifacts(out).load()
     k = np.asarray(scene['camera']['intrinsics'])
     camera_forward = scene['camera']['forward']
     camera_up = scene['camera']['up']
     h, w = 280, 504
     render_start = time.perf_counter()
-    client = p.connect(p.DIRECT)
-    try:
-        solver = PyBulletSolver(p)
-        ground, body, obstacle_bodies = solver.create_world(geometry, args, out)
-        near,far=.1,max(100,args.radius*4)
-        fx,fy,cx0,cy0=float(k[0,0]),float(k[1,1]),float(k[0,2]),float(k[1,2])
-        projection=[2*fx/w,0,0,0,0,2*fy/h,0,0,1-2*cx0/w,2*cy0/h-1,(far+near)/(near-far),-1,0,0,2*far*near/(near-far),0]
-        view=p.computeViewMatrix([0,0,0],camera_forward,camera_up)
+    near,far=.1,max(100,args.radius*4)
+    fx,fy,cx0,cy0=float(k[0,0]),float(k[1,1]),float(k[0,2]),float(k[1,2])
+    projection=[2*fx/w,0,0,0,0,2*fy/h,0,0,1-2*cx0/w,2*cy0/h-1,(far+near)/(near-far),-1,0,0,2*far*near/(near-far),0]
+    with BulletRasterSession(SceneArtifacts(out),args,w,h,near,far,projection) as frame_source:
         depth_dir=out/'depth'; ids_dir=out/'instance_id'; depth_dir.mkdir();ids_dir.mkdir()
         depth_video=out/'depth.mp4'; id_video=out/'instance_id.mp4'
         def encoder(path):
             return subprocess.Popen(['ffmpeg','-hide_banner','-loglevel','error','-y','-f','rawvideo','-pix_fmt','gray','-s',f'{w}x{h}','-r','30','-i','-','-an','-c:v','libx264','-pix_fmt','yuv420p',str(path)],stdin=subprocess.PIPE)
         enc_depth,enc_id=encoder(depth_video),encoder(id_video)
-        renderer=RasterRenderer(p,w,h,near,far,view,projection,ground,body,obstacle_bodies,args.radius,args.seconds)
+        renderer=RasterRenderer(frame_source,w,h,args.radius,args.seconds)
         try:
             first_ids,raster_frame_times=renderer.render(rows,depth_dir,ids_dir,(enc_depth,enc_id))
         finally:
@@ -67,5 +61,3 @@ def render_saved_scene(out, args, scene, car, target, rows):
                 'projection_evidence': projection_evidence,
                 'actual_bbox': actual_bbox,
                 'render_time': time.perf_counter()-render_start}
-    finally:
-        p.disconnect(client)

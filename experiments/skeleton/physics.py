@@ -164,3 +164,47 @@ def solve_saved_scene(out, args, scene, component_ids, tops, actions=None):
         raise
     finally:
         p.disconnect(client)
+
+
+class BulletRasterSession:
+    """Renderer-facing frame source; Bullet handles never leave this adapter."""
+    def __init__(self, artifacts, args, width, height, near, far, projection):
+        self.artifacts=artifacts;self.args=args
+        self.width=width;self.height=height;self.near=near;self.far=far
+        self.projection=projection
+
+    def __enter__(self):
+        import pybullet as p
+        self.p=p
+        self.client=p.connect(p.DIRECT)
+        try:
+            geometry=self.artifacts.load()
+            self.ground,self.body,self.obstacles=PyBulletSolver(p).create_world(
+                geometry,self.args,self.artifacts.root)
+            camera=geometry.scene['camera']
+            self.view=p.computeViewMatrix([0,0,0],camera['forward'],camera['up'])
+            return self
+        except BaseException:
+            p.disconnect(self.client)
+            raise
+
+    def __exit__(self, *_):
+        self.p.disconnect(self.client)
+
+    def frame(self, row):
+        p=self.p
+        p.resetBasePositionAndOrientation(self.body,row[:3],row[3:7])
+        _,_,_,zbuf,seg=p.getCameraImage(self.width,self.height,
+            viewMatrix=self.view,projectionMatrix=self.projection,
+            renderer=p.ER_TINY_RENDERER,
+            flags=p.ER_SEGMENTATION_MASK_OBJECT_AND_LINKINDEX)
+        raw=np.asarray(seg,dtype=np.int32).reshape(self.height,self.width)
+        ids=np.zeros((self.height,self.width),dtype=np.uint16)
+        ids[(raw & 0xffffff)==self.ground]=1
+        ids[(raw & 0xffffff)==self.body]=2
+        for handle,instance_id in self.obstacles.items():
+            ids[(raw & 0xffffff)==handle]=instance_id
+        ids[raw<0]=0
+        zbuf=np.asarray(zbuf).reshape(self.height,self.width)
+        metric=self.far*self.near/(self.far-(self.far-self.near)*zbuf)
+        return metric,ids

@@ -120,16 +120,18 @@ def timing_evidence(root):
         'sam': segmentation.get('timing', {'scope': 'unmeasured'}),
         'hunyuan': {'scope': mesh['implementation'], **mesh['timing_s']},
         'fit_s': {key: run['timings_s'].get(key) for key in
-                  ('support_plane_fit', 'support_contact_fit', 'subject_scale_pose_search',
-                   'candidate_rendering', 'writing')},
+                  ('ground_fit', 'scene_build', 'support_plane_fit', 'support_contact_fit',
+                   'subject_scale_pose_search', 'candidate_rendering', 'physical_trial',
+                   'writing')},
         'offline_s': {key: run['timings_s'].get(key) for key in
                       ('simulation_and_replay', 'render_and_video', 'total')},
         'offline_raster_per_frame_s': run.get('raster_frame_times_s'),
+        'offline_raster_replay_per_frame_s': run.get('raster_replay', {}).get('frame_times_s'),
         'live_initialization_s': live_times['initialization_s'],
         'live_per_step_s': live_times['steps'],
         'video_writing_s': live_times.get('optional_video_writing_s'),
         'warm_model_inference_s': None,
-        'scope': 'offline semantic acceptance and live session are separate; saved-source copy is not warm inference; conversion is unseparated where provider has no counter'}
+        'scope': 'offline semantic acceptance and live session are separate; saved-source copy is not warm inference; Hunyuan mesh_export_seconds measures conversion/writing, while video writing has its own live counter'}
 
 
 def replay_downstream(source, output):
@@ -179,7 +181,10 @@ def run(args):
     script = Path(__file__).parent
     try:
         command = [sys.executable, str(script/'observation.py'), str(args.image), str(root/'observation')]
-        for flag, value in (('--depth-source', args.depth_source), ('--segmentation-source', args.segmentation_source), ('--mesh', args.mesh)):
+        for flag, value in (('--depth-source', args.depth_source),
+                            ('--segmentation-source', args.segmentation_source),
+                            ('--mesh', args.mesh), ('--da3-weights', args.da3_weights),
+                            ('--sam-weights', args.sam_weights), ('--mesh-weights', args.mesh_weights)):
             if value:
                 command.extend([flag, str(value)])
         if args.generate_mesh:
@@ -197,6 +202,9 @@ def run(args):
         chain = {'schema': 1, 'status': 'complete', 'implementation': 'integrated_chain.py',
                  'input_sha256': digest(args.image), 'artifact_sha256': ledger(root), 'timings_s':
                  {**times, 'total': time.perf_counter()-started},
+                 'model_inputs': {key: str(value.resolve()) if value else None for key, value in
+                                  (('da3_weights', args.da3_weights), ('sam_weights', args.sam_weights),
+                                   ('mesh_weights', args.mesh_weights))},
                  'baseline': {'source': 'spec14-live-original-8963c94', 'total_s': 477.87195,
                               'observation_through_raster_s': 443.93775,
                               'proxy_render_s': 31.80805,
@@ -225,6 +233,9 @@ def main():
     build.add_argument('--segmentation-source', type=Path)
     build.add_argument('--mesh', type=Path)
     build.add_argument('--generate-mesh', action='store_true')
+    build.add_argument('--da3-weights', type=Path)
+    build.add_argument('--sam-weights', type=Path)
+    build.add_argument('--mesh-weights', type=Path)
     build.add_argument('--seconds', type=float, default=5)
     build.add_argument('--controls', type=json.loads, default=[[1, 0, 0], [0, 0, 0]])
     verify = sub.add_parser('check'); verify.add_argument('output', type=Path)

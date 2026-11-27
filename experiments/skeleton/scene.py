@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import numpy as np
 from PIL import Image
 from car_fit import fit
-from scene_support import classify_support, select_support_plane
+from scene_support import classify_support, select_support_plane, static_components, regularize_support_heights, contact_support_fit
 
 
 def write_json(path, value):
@@ -105,6 +105,7 @@ def reconstruct(inputs, args, out, start):
     sector_grid = valid_grid.copy()
     support_codes, traversable, grid_z = classify_support(
         measured & valid_grid, car_grid, valid_grid, grid_z, flat_z)
+    grid_z = regularize_support_heights(grid_z, support_codes>0)
     provenance = support_codes
     valid_grid = traversable
     for j in range(n):
@@ -131,27 +132,15 @@ def reconstruct(inputs, args, out, start):
     raised = oz-flat_z > args.obstacle_height
     np.add.at(votes,(oj[raised],oi[raised]),1)
     candidates = sector_grid & ~car_grid & (tops-flat_z > args.obstacle_height) & (votes >= args.obstacle_min_pixels)
-    component_ids = np.zeros((n,n),dtype=np.uint16)
-    visited = np.zeros((n,n),dtype=bool)
-    components = []
-    for j in range(n):
-        for i in range(n):
-            if not candidates[j,i] or visited[j,i]:
-                continue
-            cells=[]; stack=[(j,i)]; visited[j,i]=True
-            while stack:
-                cy,cx=stack.pop(); cells.append((cy,cx))
-                for ny,nx in ((cy-1,cx),(cy+1,cx),(cy,cx-1),(cy,cx+1)):
-                    if 0<=ny<n and 0<=nx<n and candidates[ny,nx] and not visited[ny,nx]:
-                        visited[ny,nx]=True;stack.append((ny,nx))
-            if len(cells) < args.obstacle_min_cells:
-                continue
-            instance_id=len(components)+3
-            if instance_id>=65535:
-                raise ValueError('too many obstacle components for uint16 instance IDs')
-            for cy,cx in cells: component_ids[cy,cx]=instance_id
-            reliable = len(cells) >= max(args.obstacle_min_cells, 3) and sum(int(votes[cy,cx]) for cy,cx in cells) >= 2*len(cells)
-            components.append({'instance_id':instance_id,'cells':len(cells),'area_m2':len(cells)*args.cell**2,'max_height_above_plane_m':float(max(tops[cy,cx]-flat_z for cy,cx in cells)),'collision_enabled':bool(reliable and not args.obstacles_render_only),'evidence_votes':sum(int(votes[cy,cx]) for cy,cx in cells),'confidence':'reliable' if reliable else 'uncertain'})
+    component_ids, components = static_components(
+        candidates, votes, args.obstacle_min_cells, args.obstacle_min_pixels, traversable)
+    for component in components:
+        cells=np.argwhere(component_ids==component['instance_id'])
+        component['area_m2']=component['cells']*args.cell**2
+        component['max_height_above_plane_m']=float(max(tops[cy,cx]-flat_z for cy,cx in cells))
+        component['collision_enabled']=not args.obstacles_render_only
+        component['confidence']='reliable'
+    uncertain_candidate_cells=int(np.count_nonzero(candidates & (component_ids==0)))
     road_points=np.stack([xx[road],yy[road],zz[road]],axis=1)
     ri=np.rint(((road_points @ right)-origin_x)/args.cell).astype(int)
     rj=np.rint((road_points @ forward)/args.cell).astype(int)
@@ -192,6 +181,8 @@ def reconstruct(inputs, args, out, start):
     if not 0 < car_depth <= args.radius:
         raise ValueError('car ground contact lies outside reconstruction sector')
     anchor_x,anchor_y,_ = world(np.array([ray_x*car_depth,car_depth,ray_z*car_depth]))
+    contact_fit=contact_support_fit(xx, yy, zz, road,
+        (ray_x*car_depth,car_depth,ray_z*car_depth))
     projected_width = (x1-x0+1)/k[0,0]*car_depth
     projected_height = (y1-y0+1)/k[1,1]*car_depth
     def projected_box_bbox(center,width,length,box_h):
@@ -264,8 +255,8 @@ def reconstruct(inputs, args, out, start):
             mesh_vertices.extend([[x+dx*half,y+dy*half,z] for z in (bottom,top) for dy in (-1,1) for dx in (-1,1)])
             mesh_indices.extend(q+t for t in (0,2,1,1,2,3,4,5,6,5,7,6,0,1,4,1,5,4,2,6,3,3,6,7,0,4,2,2,4,6,1,3,5,3,7,5))
         obstacle_meshes.append((mesh_vertices,mesh_indices))
-    scene = {'camera': {'intrinsics': k.tolist(), 'position_m': [0,0,0], 'forward': camera_forward, 'up': camera_up, 'fixed': True}, 'ground': {'plane_z_ax_by_c': [a,b,c], 'flat_world_z_m': flat_z, 'height_m': height, 'pitch_deg': pitch, 'rms_m': residual, 'sample_count': int(road.sum()), 'cell_m': args.cell, 'grid_size': n, 'heightmap_method': {'near': 'metric DA3 support inlier back-projection, cell mean', 'far': 'unknown outside measured support', 'car': 'local interpolation only where neighboring support is measured', 'near_depth_m': args.near_depth, 'ground_inlier_m': args.ground_inlier, 'provenance_codes': {'unknown':0,'visible':1,'interpolated':2}, 'cell_counts': {'near_depth':int(np.count_nonzero(provenance==1)), 'interpolated':int(np.count_nonzero(provenance==2)), 'unknown':int(np.count_nonzero(provenance==0))}}}, 'sector': {'radius_m': args.radius, 'angle_deg': args.angle, 'invisible_wall': True}, 'car': {'image_bbox_xyxy': [x0,y0,x1,y1], 'excluded_image_pixels': int(car.sum()), 'footprint_filled_with_plane': True, 'ground_contact_ray': {'pixel_uv': [u_contact,y1], 'plane_intersection_depth_m': car_depth, 'world_xy_m': [anchor_x,anchor_y]}, 'mesh_fit': mesh_fit, 'initial_orientation_xyzw': car_orientation, 'collision_shape': 'convex hull of fitted Hunyuan mesh', 'box_fit': {'method': 'ground-edge anchor and projected bounding-box search', 'reference_bbox_xyxy': target, 'predicted_bbox_xyxy': best[5], 'predicted_bbox_iou': best[0], 'width_from_bbox_at_ground_depth_m': projected_width, 'height_from_bbox_at_ground_depth_m': projected_height}, 'depth_m': car_depth, 'size_m': [width,length,box_h], 'volume_m3': mesh_volume, 'density_kg_m3': args.density, 'mass_kg': mass, 'initial_position_m': car_pos}, 'mesh': {'vertices': len(vertices), 'triangles': len(indices)//3}}
-    scene['geometry_diagnostics'] = {'original_view_ground_rms_m':residual, 'ground_inlier_pixels':int(road.sum()), 'measured_height_range_m':[float(np.min(grid_z[measured])) if measured.any() else None,float(np.max(grid_z[measured])) if measured.any() else None], 'static_candidate_count':len(components), 'static_collider_count':sum(c['collision_enabled'] for c in components)}
+    scene = {'camera': {'intrinsics': k.tolist(), 'position_m': [0,0,0], 'forward': camera_forward, 'up': camera_up, 'fixed': True}, 'ground': {'plane_z_ax_by_c': [a,b,c], 'flat_world_z_m': flat_z, 'height_m': height, 'pitch_deg': pitch, 'rms_m': residual, 'contact_fit':contact_fit, 'sample_count': int(road.sum()), 'cell_m': args.cell, 'grid_size': n, 'heightmap_method': {'near': 'metric DA3 support inlier back-projection, cell mean with isolated-spike median filter', 'far': 'unknown outside measured support', 'car': 'local interpolation only where neighboring support is measured', 'near_depth_m': args.near_depth, 'ground_inlier_m': args.ground_inlier, 'provenance_codes': {'unknown':0,'visible':1,'interpolated':2}, 'cell_counts': {'near_depth':int(np.count_nonzero(provenance==1)), 'interpolated':int(np.count_nonzero(provenance==2)), 'unknown':int(np.count_nonzero(provenance==0))}}}, 'sector': {'radius_m': args.radius, 'angle_deg': args.angle, 'invisible_wall': True}, 'car': {'image_bbox_xyxy': [x0,y0,x1,y1], 'excluded_image_pixels': int(car.sum()), 'footprint_filled_with_plane': True, 'ground_contact_ray': {'pixel_uv': [u_contact,y1], 'plane_intersection_depth_m': car_depth, 'world_xy_m': [anchor_x,anchor_y]}, 'mesh_fit': mesh_fit, 'initial_orientation_xyzw': car_orientation, 'collision_shape': 'convex hull of fitted Hunyuan mesh', 'box_fit': {'method': 'ground-edge anchor and projected bounding-box search', 'reference_bbox_xyxy': target, 'predicted_bbox_xyxy': best[5], 'predicted_bbox_iou': best[0], 'width_from_bbox_at_ground_depth_m': projected_width, 'height_from_bbox_at_ground_depth_m': projected_height}, 'depth_m': car_depth, 'size_m': [width,length,box_h], 'volume_m3': mesh_volume, 'density_kg_m3': args.density, 'mass_kg': mass, 'initial_position_m': car_pos}, 'mesh': {'vertices': len(vertices), 'triangles': len(indices)//3}}
+    scene['geometry_diagnostics'] = {'original_view_ground_rms_m':residual, 'original_view_support_rms_m':float(np.sqrt(np.mean((zz[road]-(a*xx[road]+b*yy[road]+c))**2))), 'ground_inlier_pixels':int(road.sum()), 'measured_height_range_m':[float(np.min(grid_z[measured])) if measured.any() else None,float(np.max(grid_z[measured])) if measured.any() else None], 'static_candidate_count':len(components), 'uncertain_candidate_cells':uncertain_candidate_cells, 'static_collider_count':sum(c['collision_enabled'] for c in components)}
     scene['support_evidence'] = {'file':'heightmap.npz', 'codes':{'unknown':0,'visible':1,'interpolated':2}, 'visible_cells':int(np.count_nonzero(support_codes==1)), 'interpolated_cells':int(np.count_nonzero(support_codes==2)), 'unknown_cells':int(np.count_nonzero(support_codes==0)), 'traversable_cells':int(traversable.sum()), 'boundary':'edges of traversable cells'}
     scene['entities'] = [{'id': 1, 'role': 'support', 'motion': 'fixed', 'collider': 'heightmap.npz'},
                          {'id': 2, 'role': 'controlled_subject', 'motion': 'dynamic',

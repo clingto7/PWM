@@ -23,3 +23,15 @@ class SupportContractTest(unittest.TestCase):
 
 
 if __name__=='__main__': unittest.main()
+
+class SupportHeightTest(unittest.TestCase):
+    def test_isolated_depth_spike_is_removed_without_flattening_slope(self):
+        from scene_support import regularize_support_heights
+        y,x=np.indices((7,7))
+        heights=1+.01*x+.02*y
+        heights[3,3]+=.05
+        observed=np.ones((7,7),bool)
+        result=regularize_support_heights(heights,observed)
+        self.assertAlmostEqual(result[3,3],1.09,places=2)
+        self.assertAlmostEqual(result[1,1],1.03,places=3)
+        self.assertAlmostEqual(result[5,5],1.15,places=3)

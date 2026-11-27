@@ -79,3 +79,65 @@ def select_support_plane(xx, yy, zz, valid, subject, tolerance):
     coeff=np.linalg.lstsq(design,zz[patch],rcond=None)[0]
     rms=float(np.sqrt(np.mean((design@coeff-zz[patch])**2)))
     return coeff,patch,rms
+
+
+def contact_support_fit(xx, yy, zz, support, contact_xyz, radius_m=2.0):
+    """Fit the locally observed support within a metric radius of contact."""
+    cx,cy,_=contact_xyz
+    local=np.asarray(support,bool)&((xx-cx)**2+(yy-cy)**2<=radius_m**2)
+    count=int(local.sum())
+    if count<100: raise ValueError('insufficient observed support near subject contact')
+    design=np.column_stack((xx[local],yy[local],np.ones(count)))
+    coeff=np.linalg.lstsq(design,zz[local],rcond=None)[0]
+    rms=float(np.sqrt(np.mean((design@coeff-zz[local])**2)))
+    return {'radius_m':radius_m,'sample_count':count,
+            'coverage_fraction':count/int(np.count_nonzero(support)),
+            'rms_m':rms,'plane_z_ax_by_c':coeff.tolist(),
+            'method':'metric-radius observed support around subject ground-contact ray'}
+
+
+def static_components(candidate, votes, minimum_cells, minimum_votes, support=None):
+    """Assign IDs only to connected, repeatedly observed static evidence."""
+    candidate=np.asarray(candidate,bool)
+    votes=np.asarray(votes)
+    support=np.asarray(support,bool) if support is not None else np.ones(candidate.shape,bool)
+    ids=np.zeros(candidate.shape,dtype=np.uint16)
+    visited=np.zeros(candidate.shape,bool)
+    entities=[]
+    h,w=candidate.shape
+    for sy,sx in np.argwhere(candidate):
+        if visited[sy,sx]: continue
+        stack=[(int(sy),int(sx))];visited[sy,sx]=True;cells=[]
+        while stack:
+            y,x=stack.pop();cells.append((y,x))
+            for ny,nx in ((y-1,x),(y+1,x),(y,x-1),(y,x+1)):
+                if 0<=ny<h and 0<=nx<w and candidate[ny,nx] and not visited[ny,nx]:
+                    visited[ny,nx]=True;stack.append((ny,nx))
+        evidence=sum(int(votes[y,x]) for y,x in cells)
+        supported=sum(bool(support[y,x]) for y,x in cells)
+        if (len(cells)<max(minimum_cells,3) or evidence<max(minimum_votes,2)*len(cells)
+                or supported*2<len(cells)):
+            continue
+        instance_id=len(entities)+3
+        if instance_id>=65535: raise ValueError('too many static entities')
+        for y,x in cells:ids[y,x]=instance_id
+        entities.append({'instance_id':instance_id,'cells':len(cells),'evidence_votes':evidence,'supported_cells':supported})
+    return ids,entities
+
+
+def regularize_support_heights(heights, observed):
+    """Suppress isolated metric-depth spikes while retaining coherent relief."""
+    heights=np.asarray(heights,dtype=float)
+    observed=np.asarray(observed,bool)
+    result=heights.copy()
+    h,w=heights.shape
+    for y,x in np.argwhere(observed):
+        if not (0<y<h-1 and 0<x<w-1):continue
+        neighborhood=heights[y-1:y+2,x-1:x+2]
+        visible=observed[y-1:y+2,x-1:x+2]
+        if visible.sum()<5:continue
+        neighbors=visible.copy();neighbors[1,1]=False
+        median=float(np.median(neighborhood[neighbors]))
+        if abs(heights[y,x]-median)>.01:
+            result[y,x]=median
+    return result

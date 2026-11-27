@@ -17,6 +17,48 @@ CONCLUDE=CHECK.with_name('conclude.py')
 
 
 class CheckCliTest(unittest.TestCase):
+    def test_incomplete_historical_heightmap_uses_legacy_rest_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);rec=self.fixture(root)
+            (root/'car_collision_hull.obj').write_text('v 0 0 0\n')
+            np.savez_compressed(root/'heightmap.npz',ground_z_m=np.zeros((2,2),dtype=float))
+            rec['outputs']['heightmap.npz']=hashlib.sha256((root/'heightmap.npz').read_bytes()).hexdigest()
+            rec['stages']['scene']['outputs']['heightmap.npz']=rec['outputs']['heightmap.npz']
+            (root/'run.json').write_text(json.dumps(rec))
+            result=self.invoke(root)
+            self.assertTrue(result.stdout,result.stderr)
+            report=json.loads(result.stdout)
+            self.assertEqual(report['metrics']['final_resting_height_error_m'],0)
+
+    def test_contact_fit_gate_keeps_full_support_error_visible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);rec=self.fixture(root)
+            scene=json.loads((root/'scene.json').read_text())
+            scene['ground']['rms_m']=.0356
+            scene['ground']['contact_fit']={'rms_m':.0068,'sample_count':21000,
+                'coverage_fraction':.30,'radius_m':2.0,
+                'method':'metric-radius observed support around subject ground-contact ray'}
+            (root/'scene.json').write_text(json.dumps(scene))
+            rec['outputs']['scene.json']=hashlib.sha256((root/'scene.json').read_bytes()).hexdigest()
+            rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
+            (root/'run.json').write_text(json.dumps(rec))
+            result=self.invoke(root)
+            report=json.loads(result.stdout)
+            self.assertTrue(report['checks']['ground_fit'])
+            self.assertAlmostEqual(report['metrics']['ground_fit_rms_m'],.0356)
+            self.assertAlmostEqual(report['metrics']['contact_fit_rms_m'],.0068)
+            subprocess.run([sys.executable,str(CONCLUDE),str(root)],capture_output=True,text=True)
+            conclusion=json.loads((root/'first_round_conclusion.json').read_text())
+            self.assertTrue(conclusion['conditions']['ground_fit']['decision'])
+            self.assertAlmostEqual(conclusion['conditions']['ground_fit']['full_support_rms_m'],.0356)
+            scene['ground']['contact_fit']['coverage_fraction']=.01
+            (root/'scene.json').write_text(json.dumps(scene))
+            rec['outputs']['scene.json']=hashlib.sha256((root/'scene.json').read_bytes()).hexdigest()
+            rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
+            (root/'run.json').write_text(json.dumps(rec))
+            report=json.loads(self.invoke(root).stdout)
+            self.assertFalse(report['checks']['ground_fit'])
+
     def test_conclusion_cli_hash_unset_gates_and_timing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);rec=self.fixture(root)

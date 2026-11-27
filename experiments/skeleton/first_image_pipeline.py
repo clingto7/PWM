@@ -62,7 +62,7 @@ def build(args):
             raise ValueError('saved scene inputs differ from current bundle')
         for name in SceneArtifacts.NAMES:
             shutil.copyfile(saved/name, out/name)
-        for name in ('fit_diagnostics.json', 'fit_visuals/before.png', 'fit_visuals/after.png'):
+        for name in ('classification.json', 'fit_diagnostics.json', 'fit_visuals/before.png', 'fit_visuals/after.png'):
             if (saved/name).is_file():
                 (out/name).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(saved/name, out/name)
@@ -175,7 +175,7 @@ def build(args):
         mesh_seconds = source_mesh['timing_s']['total']
     record_stage(out, 'subject_mesh', [bundled['hunyuan_mesh']], [bundled['hunyuan_mesh']],
                  mesh_implementation, '1', mesh_parameters, mesh_seconds)
-    fit_files = [name for name in ('fit_diagnostics.json', 'fit_visuals/before.png',
+    fit_files = [name for name in ('classification.json', 'fit_diagnostics.json', 'fit_visuals/before.png',
                  'fit_visuals/after.png') if (out/name).is_file()]
     record_stage(out, 'scene', input_files, [*SceneArtifacts.NAMES, *fit_files],
                  'first_image.reconstruct', '1', record['stages']['ground_fit_scene']['parameters'],

@@ -230,7 +230,16 @@ def reconstruct(inputs, args, out, start):
                     best=(score,width,length,box_h,center,bbox)
     if best is None:
         raise ValueError('unable to project box into original camera')
-    fitted_mesh, mesh_fit = fit(inputs['hunyuan_mesh'], car, depth, k, right, forward, normal, flat_z, (anchor_x,anchor_y), car_depth, out/'fit_visuals')
+    category_evidence = None
+    if getattr(args, 'bundle', None) and (args.bundle/'classification.json').is_file():
+        from stage_contracts import check as check_stage
+        import shutil
+        check_stage(args.bundle, 'classification')
+        category_evidence = json.loads((args.bundle/'classification.json').read_text())
+        shutil.copyfile(args.bundle/'classification.json', out/'classification.json')
+    fitted_mesh, mesh_fit = fit(inputs['hunyuan_mesh'], car, depth, k, right, forward, normal,
+                                flat_z, (anchor_x,anchor_y), car_depth, out/'fit_visuals',
+                                category_evidence, (grid_z, valid_grid, origin_x, args.cell))
     write_json(out/'fit_diagnostics.json', mesh_fit)
     fitted_mesh.export(out/'fitted_car.obj')
     hull = fitted_mesh.convex_hull

@@ -62,6 +62,10 @@ def build(args):
             raise ValueError('saved scene inputs differ from current bundle')
         for name in SceneArtifacts.NAMES:
             shutil.copyfile(saved/name, out/name)
+        for name in ('fit_diagnostics.json', 'fit_visuals/before.png', 'fit_visuals/after.png'):
+            if (saved/name).is_file():
+                (out/name).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(saved/name, out/name)
         reconstruction = SimpleNamespace(artifacts=SceneArtifacts(out), ground_time=0.0, scene_time=0.0)
     else:
         reconstruction=reconstruct(inputs,args,out,start)
@@ -171,7 +175,9 @@ def build(args):
         mesh_seconds = source_mesh['timing_s']['total']
     record_stage(out, 'subject_mesh', [bundled['hunyuan_mesh']], [bundled['hunyuan_mesh']],
                  mesh_implementation, '1', mesh_parameters, mesh_seconds)
-    record_stage(out, 'scene', input_files, SceneArtifacts.NAMES,
+    fit_files = [name for name in ('fit_diagnostics.json', 'fit_visuals/before.png',
+                 'fit_visuals/after.png') if (out/name).is_file()]
+    record_stage(out, 'scene', input_files, [*SceneArtifacts.NAMES, *fit_files],
                  'first_image.reconstruct', '1', record['stages']['ground_fit_scene']['parameters'],
                  ground_time + scene_time)
     record_stage(out, 'actions', ['scene.json'], ['impulses.json'],
@@ -180,7 +186,8 @@ def build(args):
                         'ballistic/trajectory.json', 'ballistic/replay_trajectory.json',
                         'obstacle/trajectory.json', 'obstacle/replay_trajectory.json',
                         'contacts.json']
-    record_stage(out, 'physics', [*SceneArtifacts.NAMES, 'impulses.json'], trajectory_files,
+    record_stage(out, 'physics', [*SceneArtifacts.NAMES, 'impulses.json'],
+                 [*trajectory_files, 'fit_trial.json'],
                  'PyBulletSolver', str(api_version()),
                  record['stages']['simulation_replay']['parameters'], sim_time)
     render_files = [name for name in outputs if name.startswith(('depth/', 'instance_id/'))

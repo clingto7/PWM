@@ -230,7 +230,8 @@ def reconstruct(inputs, args, out, start):
                     best=(score,width,length,box_h,center,bbox)
     if best is None:
         raise ValueError('unable to project box into original camera')
-    fitted_mesh, mesh_fit = fit(inputs['hunyuan_mesh'], car, depth, k, right, forward, normal, flat_z, (anchor_x,anchor_y), car_depth)
+    fitted_mesh, mesh_fit = fit(inputs['hunyuan_mesh'], car, depth, k, right, forward, normal, flat_z, (anchor_x,anchor_y), car_depth, out/'fit_visuals')
+    write_json(out/'fit_diagnostics.json', mesh_fit)
     fitted_mesh.export(out/'fitted_car.obj')
     hull = fitted_mesh.convex_hull
     hull.export(out/'car_collision_hull.obj')

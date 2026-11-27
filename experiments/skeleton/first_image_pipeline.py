@@ -252,12 +252,17 @@ def main(argv=None):
     parser.add_argument('--obstacles-render-only',action='store_true')
     parser.add_argument('--seconds',type=float,default=5)
     parser.add_argument('--render-gaussians',action='store_true',help='also render geometric gsplat frames (requires CUDA)')
+    parser.add_argument('--scene-only', action='store_true', help='build checked scene and passive trial for online control')
     args=parser.parse_args(argv)
     values=(args.radius,args.angle,args.cell,args.near_depth,args.ground_inlier,args.obstacle_height,args.friction,args.density,args.speed,args.obstacle_min_speed,args.ballistic_up_speed,args.seconds)
     if not (all(math.isfinite(value) for value in values) and 0 < args.radius <= 100 and 0 < args.angle < 180 and 0 < args.cell <= args.radius/2 and 0 < args.near_depth <= args.radius and 0 < args.ground_inlier <= 2 and 0 < args.obstacle_height <= 10 and 1 <= args.obstacle_min_pixels <= 1000 and 1 <= args.obstacle_min_cells <= 1000 and 0 <= args.friction <= 2 and 0 < args.density <= 10000 and 0 < args.speed <= 100 and 0 < args.obstacle_min_speed <= 15 and 0 < args.seconds <= 60 and int(args.seconds*240) >= 1 and int(args.seconds*30) >= 1):
         parser.error('invalid parameter range: require positive radius/cell/density/speed/duration/inlier; angle (0,180), near-depth <= radius, friction [0,2], and at least one physics and video frame')
     try:
-        build(args)
+        if args.scene_only:
+            from scene_only import build as build_scene_only
+            build_scene_only(args)
+        else:
+            build(args)
     except Exception as exc:
         out = args.output.resolve()
         if out.is_dir():

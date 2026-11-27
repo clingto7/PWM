@@ -7,6 +7,7 @@ The run command accepts --generate-mesh instead of --mesh when local weights exi
 """
 import argparse
 import json
+import math
 import shutil
 import subprocess
 import sys
@@ -55,7 +56,7 @@ def check_live_artifacts(root):
 def check_chain(root):
     root = root.resolve()
     chain = json.loads((root/'chain.json').read_text())
-    if chain['schema'] != 1 or chain['status'] != 'complete':
+    if chain['schema'] not in (1, 2) or chain['status'] != 'complete':
         raise ValueError('chain is incomplete')
     if digest(inside(root, 'observation/inputs/input.jpg')) != chain['input_sha256']:
         raise ValueError('original image hash mismatch')
@@ -64,20 +65,45 @@ def check_chain(root):
         check_stage(observation, stage)
     selection = json.loads((observation/'selection.json').read_text())
     selected = selection['selected_index']
-    if selected is None or not any(c['index'] == selected and c.get('contact', {}).get('supported')
-                                   for c in selection['candidates']):
+    if (selected is None or (chain['schema'] == 2 and not selection.get('reason'))
+            or not any(c['index'] == selected and c.get('contact', {}).get('supported')
+                                   for c in selection['candidates'])):
         raise ValueError('missing supported subject selection evidence')
-    for stage in ('observation', 'subject_mesh', 'scene', 'actions', 'physics', 'raster'):
+    for stage in (('observation', 'subject_mesh', 'scene') if chain['schema'] == 2 else
+                  ('observation', 'subject_mesh', 'scene', 'actions', 'physics', 'raster')):
         check_stage(scene, stage)
     run = json.loads((scene/'run.json').read_text())
     fit_text = (scene/'fit_diagnostics.json').read_text().lower()
     if any(term in fit_text for term in ('mini', 'category_size', 'class_size')) or \
        any(term in json.dumps(run.get('parameters', {})).lower() for term in ('mini', 'category_size', 'class_size')):
         raise ValueError('category size prior in scene parameters')
-    saved_result = check_saved_run(scene)
-    if not saved_result['passed']:
-        raise ValueError('saved-run semantic gates failed: '+', '.join(
-            name for name, passed in saved_result['checks'].items() if not passed))
+    if chain['schema'] == 2:
+        if run.get('mode') != 'scene_only' or run.get('schema') != 3:
+            raise ValueError('expected scene-only run')
+        from gates import THRESHOLDS
+        fit = json.loads((scene/'fit_diagnostics.json').read_text())
+        trial = json.loads((scene/'fit_trial.json').read_text())
+        after = fit['diagnostics']['after']
+        if (not fit.get('fit_trusted') or not all(fit.get('trust_checks', {}).values())
+                or after['rendered_silhouette_iou'] < THRESHOLDS['initial_mask_iou_min']
+                or after['visible_depth_pixel_count'] <= 0
+                or after['visible_depth_mae_m'] is None
+                or not math.isfinite(after['visible_depth_mae_m'])
+                or not -.10 <= after['support_contact_gap_m'] <= .15
+                or not trial.get('trusted')
+                or not all(math.isfinite(trial[key]) for key in
+                           ('initial_support_gap_m', 'max_penetration_m', 'passive_drift_m'))
+                or not trial['initial_support_gap_m'] <= .15
+                or not trial['max_penetration_m'] <= .10
+                or not trial['passive_drift_m'] <= .25):
+            raise ValueError('scene-only fit or passive contact gates failed')
+        if any((scene/name).exists() for name in ('trajectory.json', 'impulses.json', 'raster_replay', 'depth.mp4')):
+            raise ValueError('offline acceptance artifact in scene-only run')
+    else:
+        saved_result = check_saved_run(scene)
+        if not saved_result['passed']:
+            raise ValueError('saved-run semantic gates failed: '+', '.join(
+                name for name, passed in saved_result['checks'].items() if not passed))
     session = json.loads((live/'session.json').read_text())
     for name, expected in session['scene_and_observation_sha256'].items():
         path = Path(name)
@@ -124,18 +150,24 @@ def timing_evidence(root):
                    'subject_scale_pose_search', 'candidate_rendering', 'physical_trial',
                    'writing')},
         'offline_s': {key: run['timings_s'].get(key) for key in
-                      ('simulation_and_replay', 'render_and_video', 'total')},
+                      ('simulation_and_replay', 'render_and_video', 'total')}
+                     if run.get('mode') != 'scene_only' else
+                     {'simulation_and_replay': None, 'render_and_video': None, 'total': None},
         'offline_raster_per_frame_s': run.get('raster_frame_times_s'),
         'offline_raster_replay_per_frame_s': run.get('raster_replay', {}).get('frame_times_s'),
         'live_initialization_s': live_times['initialization_s'],
+        'passive_world_initialization_s': run['timings_s'].get('passive_world_initialization'),
+        'passive_trial_s': run['timings_s'].get('physical_trial'),
         'live_per_step_s': live_times['steps'],
         'video_writing_s': live_times.get('optional_video_writing_s'),
         'warm_model_inference_s': None,
-        'scope': 'offline semantic acceptance and live session are separate; saved-source copy is not warm inference; Hunyuan mesh_export_seconds measures conversion/writing, while video writing has its own live counter'}
+        'scope': 'offline action and raster acceptance is absent in scene-only runs; offline total is not comparable to the prior 478-second chain; saved-source copy is not warm inference; no speedup is claimed'}
 
 
 def replay_downstream(source, output):
     check_chain(source)
+    if json.loads((source/'chain.json').read_text())['schema'] != 2:
+        raise ValueError('scene-only replay requires a scene-only chain')
     source = source.resolve(); output = output.resolve()
     if output.exists() and any(output.iterdir()):
         raise ValueError('replay output directory is not empty')
@@ -149,7 +181,7 @@ def replay_downstream(source, output):
         seconds = json.loads((source/'scene/run.json').read_text())['parameters']['seconds']
         times[stage] = execute([sys.executable, str(script/'first_image_pipeline.py'),
             str(output/'scene'), '--bundle', str(output/'observation'),
-            '--resume-scene', str(source/'scene'), '--seconds', str(seconds)])
+            '--resume-scene', str(source/'scene'), '--seconds', str(seconds), '--scene-only'])
         stage = 'live replay'
         controls = [json.loads(line)['control_delta_velocity_m_s'] for line in
                     (source/'live/steps.jsonl').read_text().splitlines()]
@@ -157,7 +189,7 @@ def replay_downstream(source, output):
         times[stage] = execute([sys.executable, str(script/'live_session.py'),
             str(output/'scene'), str(output/'live'), '--controls', str(output/'controls.json'), '--video'])
         stage = 'check'
-        write(output/'chain.json', {'schema': 1, 'status': 'complete',
+        write(output/'chain.json', {'schema': 2, 'status': 'complete',
             'implementation': 'integrated_chain.py replay', 'replayed_from': str(source),
             'input_sha256': digest(output/'observation/inputs/input.jpg'),
             'artifact_sha256': ledger(output),
@@ -192,14 +224,14 @@ def run(args):
         times[stage] = execute(command)
         stage = 'scene'
         times[stage] = execute([sys.executable, str(script/'first_image_pipeline.py'),
-                               str(root/'scene'), '--bundle', str(root/'observation'), '--seconds', str(args.seconds)])
+                               str(root/'scene'), '--bundle', str(root/'observation'), '--seconds', str(args.seconds), '--scene-only'])
         stage = 'live'
         controls = root/'controls.json'
         write(controls, args.controls)
         times[stage] = execute([sys.executable, str(script/'live_session.py'), str(root/'scene'),
                                str(root/'live'), '--controls', str(controls), '--video'])
         stage = 'check'
-        chain = {'schema': 1, 'status': 'complete', 'implementation': 'integrated_chain.py',
+        chain = {'schema': 2, 'status': 'complete', 'implementation': 'integrated_chain.py',
                  'input_sha256': digest(args.image), 'artifact_sha256': ledger(root), 'timings_s':
                  {**times, 'total': time.perf_counter()-started},
                  'model_inputs': {key: str(value.resolve()) if value else None for key, value in

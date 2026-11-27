@@ -11,6 +11,19 @@ CLI = Path(__file__).with_name('observation.py')
 
 
 class ObservationCliTest(unittest.TestCase):
+    def test_missing_image_preserves_original_failure_in_stage_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp)/'missing.jpg'
+            out = Path(tmp)/'observation'
+            result = subprocess.run([sys.executable, str(CLI), str(missing), str(out)],
+                capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            status = json.loads((out/'stage_status.json').read_text())
+            self.assertEqual(status['status'], 'failed')
+            self.assertEqual(status['error_type'], 'FileNotFoundError')
+            self.assertIn('missing.jpg', status['reason'])
+            self.assertNotIn('stage_status.json', status['reason'])
+
     def test_image_only_produces_checked_observation_without_downstream_bundle(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / 'observation'

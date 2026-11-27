@@ -206,8 +206,11 @@ def main():
         build(args)
     except Exception as exc:
         if args.output.is_dir():
-            status=json.loads((args.output/'stage_status.json').read_text())
-            write(args.output/'stage_status.json', {'stage':status['stage'],'status':'failed',
+            try:
+                status=json.loads((args.output/'stage_status.json').read_text())
+            except (OSError, ValueError):
+                status={'stage':'setup'}
+            write(args.output/'stage_status.json', {'stage':status.get('stage','setup'),'status':'failed',
                 'error_type':type(exc).__name__,'reason':str(exc)})
         raise
 

@@ -312,3 +312,29 @@ available diagnostics. A mismatch or renderer failure leaves a diagnostic
 failure manifest. The normal original-image run renders only the selected
 renderer. Gaussian comparison requires the pinned GPU environment; no
 cross-game or A800 Gaussian result is asserted here.
+
+## Persistent live session (ticket #27)
+
+Start from an existing saved reconstructed run, such as `automatic/run` from the
+existing-image chain. The run's scene, bundle and observation inputs are read
+only. `LiveSession.step(delta_velocity_m_s)` applies a finite three-component
+velocity change, advances eight 240 Hz Bullet states, reads contact evidence,
+and renders the **current** body pose with the fixed raster camera. One Bullet
+world remains open until the context exits. The old three-action simulation and
+offline renderer commands remain separate.
+
+```sh
+python experiments/skeleton/live_session.py SAVED_RUN LIVE_OUTPUT --controls controls.json --video
+```
+
+`controls.json` is a JSON list such as `[[0,2,0],[0,0,0],[1,0,0]]`.
+For interactive driving, omit `--controls` and send one JSON vector per stdin
+line. Each stdout JSON result is flushed before the next line is read. Frame
+paths in results are relative to `LIVE_OUTPUT`; `depth.png` and
+`instance_id.png` are 16-bit proxy channels. `trajectory.json` includes the
+initial state and every solved state; `steps.jsonl` links each control, state,
+contact and frame in order. `contacts.json`, `session.json` and `timings.json`
+provide offline comparison and reproducibility evidence. The latter separates
+initialization, waiting, physics, raster and writing, with min, median, p95 and
+max rather than an FPS threshold. Optional `proxy.mp4` assembles the saved
+instance-ID frames after the session closes and records its writing time.

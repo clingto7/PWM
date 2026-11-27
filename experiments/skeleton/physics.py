@@ -291,6 +291,11 @@ class BulletRasterSession:
     def frame(self, row):
         p=self.p
         p.resetBasePositionAndOrientation(self.body,row[:3],row[3:7])
+        return self.frame_current()
+
+    def frame_current(self):
+        """Rasterize the live body without changing its physics state."""
+        p=self.p
         _,_,_,zbuf,seg=p.getCameraImage(self.width,self.height,
             viewMatrix=self.view,projectionMatrix=self.projection,
             renderer=p.ER_TINY_RENDERER,

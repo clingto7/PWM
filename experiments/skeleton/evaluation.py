@@ -3,13 +3,14 @@
 Input JSON: {schema:1, games:[{id,split,scenes:[{id,image,eligible,
 annotation,run}]}]}. Annotation is scoring-only and never passed to the runner.
 Freeze JSON: {schema:1, algorithm_revision, config_sha256, failure_conditions,
-thresholds:{detection_iou_min, geometry_depth_mae_m_max,
+thresholds:{detection_iou_min, geometry_contact_fit_rms_m_max,
 contact_penetration_m_max, render_iou_min, total_seconds_max},
 aggregate_success_min}. Freeze before opening holdout images.
 """
 import argparse
 import hashlib
 import math
+import os
 import json
 from pathlib import Path
 
@@ -38,6 +39,9 @@ def validate(dataset):
                 raise ValueError(f'{game["id"]}: require five distinct eligible scenes')
             if any(not s.get('image') or not s.get('annotation') for s in eligible):
                 raise ValueError(f'{game["id"]}: image and scoring annotation required')
+            available = [Path(s['image']) for s in eligible if Path(s['image']).is_file()]
+            if len({digest(path) for path in available}) != len(available):
+                raise ValueError(f'{game["id"]}: require distinct eligible images by content')
     return games
 
 
@@ -70,6 +74,15 @@ def score(dataset, freeze, split):
                     raise ValueError('run revision or config differs from freeze')
                 if digest(Path(scene['image'])) != run['provenance']['image_sha256'] or digest(Path(scene['annotation'])) != run['provenance']['annotation_sha256']:
                     raise ValueError('run image or annotation differs from dataset')
+                provenance = run['provenance']
+                chain_root = Path(provenance['chain_root'])
+                if not chain_root.is_absolute():
+                    chain_root = (run_path/chain_root).resolve()
+                if digest(chain_root/'chain.json') != provenance['chain_sha256']:
+                    raise ValueError('saved chain hash differs from evaluation')
+                from automatic_chain import check as chain_check
+                if chain_check(chain_root)['status'] != 'complete':
+                    raise ValueError('saved chain read-only check failed')
                 if run['status'] != 'complete':
                     raise ValueError(run.get('reason', 'pipeline failed'))
                 values = run['metrics']
@@ -114,6 +127,7 @@ def score_run(root, annotation, output):
         result['provenance'] = {
             'image_sha256': digest(original), 'config_sha256': chain['inputs']['config'],
             'revision': bundle['revision'], 'chain_sha256': digest(root/'chain.json'),
+            'chain_root': os.path.relpath(root, output.resolve()),
             'annotation_sha256': digest(annotation)}
         if checked['status'] != 'complete':
             raise ValueError('chain read-only check failed')

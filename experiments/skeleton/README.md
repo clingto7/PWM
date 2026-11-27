@@ -288,7 +288,9 @@ image, config, chain and annotation plus the code revision. The dataset points
 to each score directory. Seal the freeze JSON by setting `sealed_sha256` to
 the SHA-256 of canonical sorted compact JSON without that field, and pin that
 digest in dataset `freeze_sha256`. The holdout scorer rejects an altered seal,
-revision/config mismatch, or image/annotation mismatch. Commit the seal and
+revision/config mismatch, image/annotation mismatch, duplicate available image
+content within a game, or a stale/invalid saved chain. Missing runs remain
+failures in the eligible denominator. Commit the seal and
 dataset pin before holdout inspection.
 
 For an opt-in fixed-upstream renderer comparison, run:

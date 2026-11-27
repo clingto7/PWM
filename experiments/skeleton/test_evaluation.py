@@ -114,6 +114,62 @@ class ScoreRunTest(unittest.TestCase):
                     {'id': f's{j}', 'image': str(image), 'annotation': str(annotation),
                      'eligible': True, 'run': str(scored)} for j in range(5)]}
                 for split in ('development', 'holdout') for i in range(3)]}
-            report = module.score(dataset, freeze, 'holdout')
+            from unittest.mock import patch
+            with patch.object(module, 'validate', return_value=dataset['games']):
+                report = module.score(dataset, freeze, 'holdout')
             self.assertEqual(report['successes'], 0)
             self.assertIn('annotation differs', report['scenes'][0]['reason'])
+
+class DatasetIdentityTest(unittest.TestCase):
+    def test_different_scene_ids_cannot_reuse_identical_existing_image(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('evaluation', CLI)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root/'a.png'; first.write_bytes(b'same pixels')
+            second = root/'b.png'; second.write_bytes(b'same pixels')
+            games = [{'id': f'{split}-{i}', 'split': split, 'scenes': [
+                {'id': f's{j}', 'image': str(first if j < 4 else second),
+                 'annotation': 'annotation.json', 'eligible': True} for j in range(5)]}
+                for split in ('development', 'holdout') for i in range(3)]
+            with self.assertRaisesRegex(ValueError, 'distinct eligible images'):
+                module.validate({'schema': 1, 'games': games})
+
+    def test_changed_saved_chain_fails_scored_scene(self):
+        from unittest.mock import patch
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('evaluation', CLI)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = root/'image.png'; image.write_bytes(b'image')
+            annotation = root/'annotation.json'; annotation.write_text('{}')
+            chain = root/'chain'; chain.mkdir()
+            (chain/'chain.json').write_text('{"changed":true}')
+            scored = root/'scored'; scored.mkdir()
+            (scored/'evaluation.json').write_text(json.dumps({'status': 'complete',
+                'provenance': {'revision': 'abc', 'config_sha256': '123',
+                    'image_sha256': hashlib.sha256(b'image').hexdigest(),
+                    'annotation_sha256': hashlib.sha256(b'{}').hexdigest(),
+                    'chain_root': str(chain), 'chain_sha256': 'old'},
+                'metrics': {'detection_iou': 1, 'render_iou': 1,
+                    'geometry_contact_fit_rms_m': 0, 'contact_penetration_m': 0, 'total_seconds': 1}}))
+            freeze = {'schema': 1, 'algorithm_revision': 'abc', 'config_sha256': '123',
+                'failure_conditions': ['pipeline failure'],
+                'thresholds': {'detection_iou_min': .5, 'geometry_contact_fit_rms_m_max': 1,
+                    'contact_penetration_m_max': .01, 'render_iou_min': .5,
+                    'total_seconds_max': 600}, 'aggregate_success_min': .8}
+            freeze['sealed_sha256'] = hashlib.sha256(json.dumps(freeze, sort_keys=True,
+                separators=(',', ':'), allow_nan=False).encode()).hexdigest()
+            games = [{'id': f'{split}-{i}', 'split': split, 'scenes': [
+                {'id': f's{j}', 'image': str(image), 'annotation': str(annotation),
+                 'eligible': True, 'run': str(scored)} for j in range(5)]}
+                for split in ('development', 'holdout') for i in range(3)]
+            dataset = {'schema': 1, 'freeze_sha256': freeze['sealed_sha256'], 'games': games}
+            with patch.object(module, 'validate', return_value=games):
+                report = module.score(dataset, freeze, 'holdout')
+            self.assertEqual(report['successes'], 0)
+            self.assertIn('chain', report['scenes'][0]['reason'])

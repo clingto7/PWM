@@ -125,6 +125,8 @@ def check(root):
         with np.load(root/'heightmap.npz') as data:
             surface=data['surface_z_m']
             valid=data['valid'].astype(bool)
+            sector=data['sector'].astype(bool) if 'sector' in data else valid
+            support=data['support_evidence'] if 'support_evidence' in data else None
             surface_votes=data['surface_votes']
             surface_provenance=data['surface_provenance']
         components=obstacles['components']
@@ -153,11 +155,15 @@ def check(root):
         detection=obstacles['detection']
         checks['obstacle_parameters']=detection['height_above_plane_m']==params['obstacle_height_m'] and detection['min_pixels_per_cell']==params['obstacle_min_pixels'] and detection['min_cells_per_component']==params['obstacle_min_cells'] and obstacles['render_only']==params['obstacles_render_only']
         checks['obstacle_components']=connected and actual_ids==expected_ids and [c['cells'] for c in components]==sizes and sizes==m['obstacle_component_sizes_cells'] and len(components)==m['obstacle_component_count'] and all(c['cells']>=params['obstacle_min_cells'] for c in components)
-        checks['obstacle_heightmap']=bool(np.array_equal(candidate,valid & ~footprint & (surface-ground['flat_world_z_m']>params['obstacle_height_m']) & (surface_votes>=params['obstacle_min_pixels'])) and np.all(surface_provenance[footprint]==3))
+        checks['obstacle_heightmap']=bool(np.array_equal(candidate,sector & ~footprint & (surface-ground['flat_world_z_m']>params['obstacle_height_m']) & (surface_votes>=params['obstacle_min_pixels'])) and np.all(surface_provenance[footprint]==3))
         checks['obstacle_road_ratio']=road_count>0 and road_count==obstacles['road_cells']==m['road_cells'] and false_count==obstacles['road_false_positive_cells']==m['road_false_positive_cells'] and ratio==obstacles['road_false_positive_ratio']==m['road_false_positive_ratio']
         checks['car_footprint_clear']=not np.any(footprint & (grid>0)) and obstacles['car_footprint_obstacle_cells']==0
         checks['obstacle_render_ids']={1,2}.issubset(image_ids) and image_ids.issubset({1,2}|expected_ids) and not missing_ids
-        checks['obstacle_collision_mode']=all(c['collision_enabled']==(not obstacles['render_only']) and (c['collision_shape_count']>0)==(not obstacles['render_only']) for c in components)
+        checks['obstacle_collision_mode']=all((not c['collision_enabled'] or not obstacles['render_only']) and (c['collision_shape_count']>0)==c['collision_enabled'] for c in components)
+        if support is not None:
+            evidence=scene['support_evidence']
+            checks['support_evidence']=bool(np.array_equal(valid,support>0) and all(int(np.count_nonzero(support==code))==evidence[name] for code,name in ((0,'unknown_cells'),(1,'visible_cells'),(2,'interpolated_cells'))))
+            metrics['support_evidence']=evidence
         metrics.update({'road_false_positive_ratio':ratio,'road_false_positive_cells':false_count,'road_cells':road_count,'obstacle_component_sizes_cells':sizes,'obstacle_rendered_ids':sorted(image_ids & expected_ids),'missing_obstacle_render_ids':missing_ids,'obstacle_collision_shape_counts':[c['collision_shape_count'] for c in components],'obstacles_render_only':obstacles['render_only']})
     cases_record=record.get('impulse_cases',{})
     schema=record.get('schema',1)

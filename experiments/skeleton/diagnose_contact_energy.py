@@ -35,9 +35,11 @@ def run_case(geometry, settings, velocity, seconds, variant, target_id=None):
         effective_parameters = p.getPhysicsEngineParameters()
         inertia = p.getDynamicsInfo(body, -1)[2]
         mass = geometry.mass
-        p.resetBaseVelocity(body, linearVelocity=[v*variant.get('speed_scale', 1.) for v in velocity])
+        launch = variant.get('velocity', velocity)
+        p.resetBaseVelocity(body, linearVelocity=[v*variant.get('speed_scale', 1.) for v in launch])
         rows = []
         target_contact_samples = 0
+        max_penetration = 0.0
         for frame in range(int(seconds*solver.hz)):
             if frame:
                 p.stepSimulation()
@@ -46,15 +48,22 @@ def run_case(geometry, settings, velocity, seconds, variant, target_id=None):
             row = [*pos, *quat, *vel, *omega]
             contacts = p.getContactPoints(bodyA=body)
             target_contact_samples += any(obstacles.get(c[2]) == target_id for c in contacts) if target_id is not None else 0
+            max_penetration = max(max_penetration, max((-float(c[8]) for c in contacts), default=0.0))
             rows.append((specific_energy(row, inertia, mass), row,
                          min((float(c[8]) for c in contacts), default=None), len(contacts)))
         # Match check.py: omit stationary frame, then compare consecutive steps.
         gains = [(rows[i][0]-rows[i-1][0], i) for i in range(2, len(rows))]
         gain, frame = max(gains)
         before, after = rows[frame-1], rows[frame]
+        final = rows[-1][1]
         return {'variant': variant['name'], 'parameters': variant['parameters'],
                 'speed_scale': variant.get('speed_scale', 1.),
+                'launch_velocity_m_s': [v*variant.get('speed_scale', 1.) for v in launch],
                 'target_contact_samples': target_contact_samples,
+                'max_contact_penetration_m': max_penetration,
+                'final_position_m': final[:3],
+                'final_linear_speed_m_s': math.sqrt(sum(v*v for v in final[7:10])),
+                'final_angular_speed_rad_s': math.sqrt(sum(v*v for v in final[10:13])),
                 'effective_engine_parameters': effective_parameters,
                 'max_step_specific_energy_gain_j_kg': max(0., gain),
                 'peak_frame': frame, 'peak_time_s': frame/solver.hz,
@@ -123,7 +132,21 @@ def main():
     if action == 'obstacle':
         variants = [variants[0]] + [
             {'name': f'obstacle_speed_{scale:.2f}', 'parameters': {'contactERP':0.025},
-             'speed_scale':scale} for scale in (1.0, 1.1, 1.2, 1.3)]
+             'speed_scale':scale} for scale in (1.0, 1.1, 1.15, 1.2, 1.3)]
+        import numpy as np
+        with np.load(root/'obstacles.npz') as obstacle_data:
+            cells = np.argwhere(obstacle_data['instance_id'] == impulses[action]['target_obstacle_id'])
+        cell_m = geometry.cell_m
+        centroid = [geometry.origin_x + float(cells[:, 1].mean())*cell_m,
+                    float(cells[:, 0].mean())*cell_m]
+        origin = geometry.car_pos
+        direction = [centroid[0]-origin[0], centroid[1]-origin[1]]
+        length = math.hypot(*direction)
+        speed = math.hypot(*velocity[:2])
+        centroid_velocity = [speed*direction[0]/length, speed*direction[1]/length, 0.0]
+        variants += [
+            {'name': f'obstacle_centroid_{scale:.2f}', 'parameters': {'contactERP':0.025},
+             'velocity':centroid_velocity, 'speed_scale':scale} for scale in (1.0, 1.1, 1.2)]
     target_id = impulses[action]['target_obstacle_id']
     results = [run_case(geometry, settings, velocity, params['seconds'], v, target_id)
                for v in variants]

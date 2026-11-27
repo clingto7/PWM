@@ -239,7 +239,8 @@ def reconstruct(inputs, args, out, start):
         shutil.copyfile(args.bundle/'classification.json', out/'classification.json')
     fitted_mesh, mesh_fit = fit(inputs['hunyuan_mesh'], car, depth, k, right, forward, normal,
                                 flat_z, (anchor_x,anchor_y), car_depth, out/'fit_visuals',
-                                category_evidence, (grid_z, valid_grid, origin_x, args.cell))
+                                category_evidence, (grid_z, valid_grid, origin_x, args.cell),
+                                getattr(args, 'use_weak_prior', False))
     write_json(out/'fit_diagnostics.json', mesh_fit)
     fitted_mesh.export(out/'fitted_car.obj')
     hull = fitted_mesh.convex_hull

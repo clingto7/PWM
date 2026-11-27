@@ -211,6 +211,8 @@ def main(argv=None):
     parser.add_argument('output',type=Path)
     parser.add_argument('--bundle',type=Path,help='run bundle containing bundle.json and inputs/')
     parser.add_argument('--resume-scene',type=Path,help='reuse validated saved scene artifacts')
+    parser.add_argument('--use-weak-prior', action='store_true',
+                        help='select a frozen model-specific prior fit when classifier evidence qualifies')
     parser.add_argument('--radius',type=float,default=27)
     parser.add_argument('--angle',type=float,default=95)
     parser.add_argument('--cell',type=float,default=.5)
@@ -245,8 +247,9 @@ def main(argv=None):
         raise
 
 
-def main_with_arguments(output, bundle, seconds):
-    main([str(output), '--bundle', str(bundle), '--seconds', str(seconds)])
+def main_with_arguments(output, bundle, seconds, use_weak_prior=False):
+    main([str(output), '--bundle', str(bundle), '--seconds', str(seconds)] +
+         (['--use-weak-prior'] if use_weak_prior else []))
 
 
 if __name__ == '__main__':

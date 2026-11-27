@@ -25,6 +25,7 @@ def main():
     parser.add_argument('--seconds', type=float, default=5)
     parser.add_argument('--resume-observation', type=Path,
                         help='reuse a validated original-image observation and rerun fitting')
+    parser.add_argument('--use-weak-prior', action='store_true')
     args = parser.parse_args()
     root = args.output.resolve()
     if root.exists() and any(root.iterdir()):
@@ -47,7 +48,8 @@ def main():
         check(root/'observation', stage)
     verify_mesh(root/'observation/mesh')
     # Retain the established run CLI and its scene, physics, and renderer contracts.
-    first_image_pipeline.main_with_arguments(root/'run', root/'observation', args.seconds)
+    first_image_pipeline.main_with_arguments(root/'run', root/'observation', args.seconds,
+                                             args.use_weak_prior)
     print(json.dumps({'observation': str(root/'observation'), 'run': str(root/'run')}))
 
 

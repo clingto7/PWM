@@ -10,7 +10,7 @@ PRIOR_WEIGHT = .025
 
 
 def eligible_prior(evidence):
-    return bool(evidence and evidence.get('class') == 'car'
+    return bool(evidence and evidence.get('class') == 'mini_cooper_s_convertible_2021'
                 and float(evidence.get('confidence', 0)) >= PRIOR_CONFIDENCE
                 and evidence.get('source') == 'classifier')
 
@@ -70,7 +70,7 @@ def raster_depth(vertices, faces, k, right, forward, normal, scale, yaw, x, y, g
     return buffer
 
 
-def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, anchor_depth, diagnostic_dir=None, category_evidence=None, support=None):
+def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, anchor_depth, diagnostic_dir=None, category_evidence=None, support=None, use_weak_prior=False):
     import cv2
     import trimesh
     from scipy.optimize import differential_evolution
@@ -150,7 +150,7 @@ def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, 
         return (1-metrics['silhouette_iou'] + .12*metrics['depth_median_absolute_error_m']/max(observed_depth,1)
                 + .03*metrics['support_contact_error_m']/max(anchor_depth,1))
     initial = [1., 0., anchor_xy[0], anchor_xy[1]]
-    before = evidence(initial)
+    before = evidence(initial) or {'valid_projection': False}
     result = differential_evolution(objective, bounds, seed=42, maxiter=35, popsize=6, polish=True, workers=1)
     prior_enabled = eligible_prior(category_evidence)
     prior_result = None
@@ -161,7 +161,10 @@ def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, 
             return objective(v) + PRIOR_WEIGHT * penalty
         prior_result = differential_evolution(prior_objective, bounds, seed=42,
                                                maxiter=35, popsize=6, polish=True, workers=1)
-    scale, yaw, x, y = map(float, result.x)
+    if use_weak_prior and not prior_enabled:
+        raise ValueError('weak size prior requested without eligible classifier evidence')
+    selected = prior_result if use_weak_prior else result
+    scale, yaw, x, y = map(float, selected.x)
     points = local * scale
     # Export local mesh in body coordinates; base pose puts wheel/contact plane on ground.
     points[:,2] -= (points[:,2].max()+points[:,2].min())/2
@@ -169,7 +172,7 @@ def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, 
     fitted = trimesh.Trimesh(vertices=points, faces=mesh.faces[:, ::-1], process=False)
     size = (span*scale).tolist()
     ratios = [size[i]/REAL_SIZE_M[i] for i in range(3)]
-    after = evidence(result.x)
+    after = evidence(selected.x)
     def rendered_metrics(pose, metrics):
         rendered = raster_depth(local, mesh.faces, k, right, forward, normal,
                                 *pose, ground_z, mask.shape)
@@ -181,11 +184,12 @@ def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, 
         metrics['rendered_silhouette_iou'] = float(np.count_nonzero(mask & visible) /
             max(1, np.count_nonzero(mask | visible)))
         metrics['support_contact_gap_m'] = contact_error(pose)
-    rendered_metrics(initial, before)
-    rendered_metrics(result.x, after)
+    if 'valid_projection' not in before:
+        rendered_metrics(initial, before)
+    rendered_metrics(selected.x, after)
     if diagnostic_dir is not None:
         diagnostic_dir.mkdir(exist_ok=True)
-        for name, pose in (('before', initial), ('after', result.x)):
+        for name, pose in (('before', initial), ('after', selected.x)):
             candidate = projected(sample, *pose)
             visual = np.zeros((h, w, 3), dtype=np.uint8)
             visual[mask, 1] = 200
@@ -207,11 +211,12 @@ def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, 
                     'size_m':size, 'size_check':{'reference_model':'MINI Cooper S Convertible (2021)',
                     'reference_size_m':REAL_SIZE_M, 'source':REAL_SIZE_SOURCE,
                     'fit_to_reference_ratio':ratios, 'reasonable':all(.7 <= r <= 1.3 for r in ratios)},
-                    'fit_objective':float(result.fun), 'observed_car_depth_m':observed_depth,
+                    'fit_objective':float(objective(selected.x)), 'observed_car_depth_m':observed_depth,
                     'ground_contact_error_m':after['support_contact_gap_m'],
                     'diagnostics': {'before': before, 'after': after},
                     'scale_uncertainty': uncertainty,
                     'no_prior': {'scale': scale, 'objective': float(result.fun)},
+                    'selected_fit': 'weak_prior' if use_weak_prior else 'no_prior',
                     'weak_category_prior': {'eligible': prior_enabled, 'classification_evidence_threshold': PRIOR_CONFIDENCE,
                                             'weight': PRIOR_WEIGHT, 'reason': None if prior_enabled else 'no eligible classifier evidence',
                                             'result': None if prior_result is None else {'scale': float(prior_result.x[0]),

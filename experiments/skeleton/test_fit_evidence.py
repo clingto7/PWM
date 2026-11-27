@@ -18,9 +18,10 @@ class FitEvidenceTest(unittest.TestCase):
         self.assertTrue(np.isinf(depth[0, 0]))
 
     def test_prior_needs_semantic_classifier_evidence_above_frozen_gate(self):
-        self.assertFalse(eligible_prior({'class': 'car', 'confidence': .89, 'source': 'classifier'}))
-        self.assertFalse(eligible_prior({'class': 'car', 'confidence': .99, 'source': 'manual'}))
-        self.assertTrue(eligible_prior({'class': 'car', 'confidence': .9, 'source': 'classifier'}))
+        self.assertFalse(eligible_prior({'class': 'car', 'confidence': .99, 'source': 'classifier'}))
+        self.assertFalse(eligible_prior({'class': 'mini_cooper_s_convertible_2021', 'confidence': .89, 'source': 'classifier'}))
+        self.assertFalse(eligible_prior({'class': 'mini_cooper_s_convertible_2021', 'confidence': .99, 'source': 'manual'}))
+        self.assertTrue(eligible_prior({'class': 'mini_cooper_s_convertible_2021', 'confidence': .9, 'source': 'classifier'}))
 
     def test_contact_gap_reads_reconstructed_support_height(self):
         bottom = np.array([[0, 0, 0], [.1, 0, 0]])

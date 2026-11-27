@@ -5,7 +5,7 @@ import math
 def obstacle_launch_speed(friction, travel_to_contact_m, minimum_speed_m_s):
     """Category-neutral default speed with room for rigid-body contact loss."""
     point_mass_speed = math.sqrt(2*friction*9.81*travel_to_contact_m+1.0)
-    return min(15.0, 1.1*max(minimum_speed_m_s, point_mass_speed))
+    return min(15.0, 1.15*max(minimum_speed_m_s, point_mass_speed))
 
 
 def action_records(velocities, mass, initial_position):

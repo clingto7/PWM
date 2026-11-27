@@ -81,14 +81,19 @@ def main():
     saved_gain, saved_frame = max((saved_energy[i]-saved_energy[i-1], i)
                                   for i in range(2, len(saved_energy)))
     variants = [
-        {'name': 'unsplit', 'parameters': {'useSplitImpulse': 0}},
+        {'name': 'unsplit', 'parameters': {'useSplitImpulse': 0, 'contactERP': 0.2}},
         {'name': 'current_split', 'parameters': {'useSplitImpulse': 1,
-                                                'splitImpulsePenetrationThreshold': 0.0}},
+                                                'splitImpulsePenetrationThreshold': 0.0,
+                                                'contactERP': 0.2}},
         {'name': 'split_default_threshold', 'parameters': {'useSplitImpulse': 1,
-                                                           'splitImpulsePenetrationThreshold': -0.04}},
+                                                           'splitImpulsePenetrationThreshold': -0.04,
+                                                           'contactERP': 0.2}},
         {'name': 'split_low_erp', 'parameters': {'useSplitImpulse': 1,
                                                'splitImpulsePenetrationThreshold': 0.0,
                                                'contactERP': 0.1}},
+        {'name': 'default_split_low_erp', 'parameters': {'useSplitImpulse': 1,
+                                                       'splitImpulsePenetrationThreshold': -0.04,
+                                                       'contactERP': 0.1}},
     ]
     results = [run_case(geometry, settings, velocity, params['seconds'], v)
                for v in variants]

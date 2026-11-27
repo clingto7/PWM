@@ -75,8 +75,8 @@ class PyBulletSolver:
         car_pos=geometry.car_pos; car_orientation=geometry.car_orientation
         p.setGravity(0,0,-9.81)
         p.setTimeStep(1/240)
-        p.setPhysicsEngineParameter(fixedTimeStep=1/240, numSolverIterations=100, deterministicOverlappingPairs=1,
-                                    useSplitImpulse=1, splitImpulsePenetrationThreshold=0.0)
+        p.setPhysicsEngineParameter(fixedTimeStep=1/240, numSolverIterations=100,
+                                    deterministicOverlappingPairs=1, contactERP=0.1)
         ground_collision = p.createCollisionShape(p.GEOM_MESH, vertices=vertices, indices=indices, flags=p.GEOM_FORCE_CONCAVE_TRIMESH)
         ground_visual = p.createVisualShape(p.GEOM_MESH, vertices=vertices, indices=indices, rgbaColor=[.5,.5,.5,1])
         ground = p.createMultiBody(0, ground_collision, ground_visual)
@@ -150,7 +150,11 @@ def solve_saved_scene(out, args, scene, component_ids, tops, actions=None):
                 raise RuntimeError('obstacle collision shape disagrees with fallback mode')
         scene['contact_friction']={'ground_lateral_friction':args.friction,'car_lateral_friction':1.0,'effective_ground_car_friction':args.friction,'obstacle_lateral_friction':args.friction,'restitution':0.0}
         scene['physics_sleep']={'car_activation_state':'enable_sleeping','activation_state_value':p.ACTIVATION_STATE_ENABLE_SLEEPING}
-        scene['physics_solver']={'split_impulse':True,'split_impulse_penetration_threshold_m':0.0}
+        scene['physics_solver']={'fixed_time_step_s':1/240, 'solver_iterations':100,
+                                 'deterministic_overlapping_pairs':True,
+                                 'contact_erp':0.1,
+                                 'split_impulse':'bullet_default',
+                                 'effective_engine_parameters':p.getPhysicsEngineParameters()}
         write_json(out/'scene.json',scene)
         targets=[]
         solid_ids={c['instance_id'] for c in components if c['collision_enabled']}

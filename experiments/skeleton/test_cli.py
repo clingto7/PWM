@@ -17,6 +17,19 @@ CONCLUDE=CHECK.with_name('conclude.py')
 
 
 class CheckCliTest(unittest.TestCase):
+    def test_incomplete_historical_heightmap_uses_legacy_rest_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);rec=self.fixture(root)
+            (root/'car_collision_hull.obj').write_text('v 0 0 0\n')
+            np.savez_compressed(root/'heightmap.npz',ground_z_m=np.zeros((2,2),dtype=float))
+            rec['outputs']['heightmap.npz']=hashlib.sha256((root/'heightmap.npz').read_bytes()).hexdigest()
+            rec['stages']['scene']['outputs']['heightmap.npz']=rec['outputs']['heightmap.npz']
+            (root/'run.json').write_text(json.dumps(rec))
+            result=self.invoke(root)
+            self.assertTrue(result.stdout,result.stderr)
+            report=json.loads(result.stdout)
+            self.assertEqual(report['metrics']['final_resting_height_error_m'],0)
+
     def test_contact_fit_gate_keeps_full_support_error_visible(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);rec=self.fixture(root)

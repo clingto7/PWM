@@ -71,6 +71,7 @@ def check(root):
     surface=ground['flat_world_z_m']
     hull_clearance=None
     support_heights=None
+    support_valid=None
     if (root/'car_collision_hull.obj').is_file() and (root/'heightmap.npz').is_file():
         import numpy as np
         from rest_support import load_obj_vertices, hull_support_clearance
@@ -84,7 +85,7 @@ def check(root):
             def clearance(row):
                 return hull_support_clearance(row,hull_vertices,support_heights,support_valid,ground['cell_m'])
             hull_clearance=clearance(final)
-    if hull_clearance is None and support_heights is None:
+    if support_heights is None or support_valid is None:
         flat_surface=surface
         def clearance(row):
             return row[2]-box['size_m'][2]/2-flat_surface

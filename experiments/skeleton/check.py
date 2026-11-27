@@ -246,8 +246,12 @@ def check(root):
                 case_checks['analytical_distance']=gate(abs(actual-expected),limits['coast_distance_error_m'])
             elif name=='ballistic':
                 base=rows[0][2]
-                airborne=[i for i,row in enumerate(rows) if row[2]>base+0.02]
-                landing=next((i for i in range(airborne[-1]+1,len(rows)) if rows[i][2]<=base+0.02),None) if airborne else None
+                # Contact is the first departure from ballistic velocity on
+                # descent. A shallow bounce can exceed the launch clearance
+                # again, so the last height crossing is not the landing.
+                landing=next((i for i in range(2,len(rows))
+                              if rows[i-1][9]<-0.1 and
+                              rows[i][9]-rows[i-1][9]>5*9.81/240),None)
                 expected_time=2*delta[2]/9.81
                 actual_time=landing/240 if landing is not None else math.inf
                 expected_range=math.hypot(*delta[:2])*expected_time

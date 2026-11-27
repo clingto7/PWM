@@ -75,7 +75,11 @@ class PyBulletSolver:
         car_pos=geometry.car_pos; car_orientation=geometry.car_orientation
         p.setGravity(0,0,-9.81)
         p.setTimeStep(1/240)
-        parameters = {'fixedTimeStep':1/240, 'numSolverIterations':100,
+        # Resolve the reconstructed mesh contact four times per recorded
+        # state. Split impulse corrects overlap in position without injecting
+        # the correction into the body's kinetic energy.
+        parameters = {'fixedTimeStep':1/240, 'numSubSteps':4,
+                      'numSolverIterations':100, 'useSplitImpulse':1,
                       'deterministicOverlappingPairs':1}
         parameters.update({'contactERP':0.025} if solver_parameters is None else solver_parameters)
         p.setPhysicsEngineParameter(**parameters)
@@ -153,9 +157,10 @@ def solve_saved_scene(out, args, scene, component_ids, tops, actions=None):
         scene['contact_friction']={'ground_lateral_friction':args.friction,'car_lateral_friction':1.0,'effective_ground_car_friction':args.friction,'obstacle_lateral_friction':args.friction,'restitution':0.0}
         scene['physics_sleep']={'car_activation_state':'enable_sleeping','activation_state_value':p.ACTIVATION_STATE_ENABLE_SLEEPING}
         scene['physics_solver']={'fixed_time_step_s':1/240, 'solver_iterations':100,
+                                 'substeps_per_recorded_state':4,
+                                 'split_impulse':True,
                                  'deterministic_overlapping_pairs':True,
                                  'contact_erp':0.025,
-                                 'split_impulse':'bullet_default',
                                  'effective_engine_parameters':p.getPhysicsEngineParameters()}
         write_json(out/'scene.json',scene)
         targets=[]

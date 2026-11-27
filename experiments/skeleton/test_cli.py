@@ -545,6 +545,14 @@ class CheckCliTest(unittest.TestCase):
                 (root/'run.json').write_text(json.dumps(rec))
                 return report['metrics']['impulse_cases'][name]
             expected_coast=1/9.81
+            def bounce_after_impact(rows):
+                impact=next(i for i in range(2,len(rows)) if rows[i][9]-rows[i-1][9]>1)
+                for i in range(impact+1,min(impact+35,len(rows))):
+                    rows[i][2]=.53
+                    rows[i][1]=rows[impact][1]+.2
+                rows[min(impact+35,len(rows)-1)][2]=.5
+            bounced=altered_case('ballistic',bounce_after_impact)
+            self.assertTrue(bounced['checks']['analytical_flight'])
             near=altered_case('coast',lambda rows:rows[-1].__setitem__(1,expected_coast+.019))
             far=altered_case('coast',lambda rows:rows[-1].__setitem__(1,expected_coast+.021))
             self.assertTrue(near['checks']['analytical_distance'])
@@ -571,7 +579,9 @@ class CheckCliTest(unittest.TestCase):
             self.assertFalse(xy_far['checks']['analytical_flight'])
             def land_at(index):
                 def change(rows):
-                    for row in rows[index:]:row[2]=.5
+                    for row in rows[index:]:
+                        row[2]=.5
+                        row[9]=0
                 return change
             time_near=altered_case('ballistic',land_at(94))
             time_far=altered_case('ballistic',land_at(92))

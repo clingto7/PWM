@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import numpy as np
 from PIL import Image
 from car_fit import fit
-from scene_support import classify_support
+from scene_support import classify_support, select_support_plane
 
 
 def write_json(path, value):
@@ -38,16 +38,10 @@ def reconstruct(inputs, args, out, start):
     xx = (xs - k[0, 2]) / k[0, 0] * depth
     yy = depth
     zz = -(ys - k[1, 2]) / k[1, 1] * depth
-    # Lower central image region is the observable near road. Exclude every car pixel.
-    # Fit the dominant support layer from finite metric points across the view.
-    # The bottom half anchors the surface, while no fixed road corridor is assumed.
-    road = (ys > int(h * .5)) & ~car & np.isfinite(depth) & (depth > 2) & (depth < args.radius)
-    if road.sum() < 100:
-        raise ValueError('insufficient trusted ground pixels')
-    design = np.stack([xx[road], yy[road], np.ones(road.sum())], axis=1)
-    coeff, _, _, _ = np.linalg.lstsq(design, zz[road], rcond=None)
+    eligible = ~car & np.isfinite(depth) & (depth > 2) & (depth < args.radius)
+    coeff, road, residual = select_support_plane(
+        xx, yy, zz, eligible, car, args.ground_inlier)
     a, b, c = map(float, coeff)
-    residual = float(np.sqrt(np.mean((design @ coeff - zz[road]) ** 2)))
     pitch = math.degrees(math.atan(b))
     # At the camera x=y=z=0, the fitted plane is c below the camera.
     height = abs(c) / math.sqrt(1 + a*a + b*b)
@@ -66,13 +60,11 @@ def reconstruct(inputs, args, out, start):
     indices = []
     valid = []
     half_angle = math.radians(args.angle / 2)
-    # Default to an explicit ray/plane intersection. In ground-aligned world
-    # coordinates the intersection height is constant; near observed road pixels
-    # replace those cells with their metric DA3 back-projections.
+    # Keep a plane as an interpolation reference; only evidenced cells traverse.
     origin_x = -(n-1)/2*args.cell
     grid_z = np.full((n,n),flat_z,dtype=np.float64)
     provenance = np.full((n,n),2,dtype=np.uint8)  # 1 depth, 2 ray/plane, 3 car fill
-    depth_road = road & (depth <= args.near_depth) & (np.abs(zz-(a*xx+b*yy+c)) <= args.ground_inlier)
+    depth_road = road & (depth <= args.near_depth)
     camera_points = np.stack([xx[depth_road],yy[depth_road],zz[depth_road]],axis=1)
     wx = camera_points @ right
     wy = camera_points @ forward
@@ -262,7 +254,7 @@ def reconstruct(inputs, args, out, start):
             mesh_indices.extend(q+t for t in (0,2,1,1,2,3,4,5,6,5,7,6,0,1,4,1,5,4,2,6,3,3,6,7,0,4,2,2,4,6,1,3,5,3,7,5))
         obstacle_meshes.append((mesh_vertices,mesh_indices))
     scene = {'camera': {'intrinsics': k.tolist(), 'position_m': [0,0,0], 'forward': camera_forward, 'up': camera_up, 'fixed': True}, 'ground': {'plane_z_ax_by_c': [a,b,c], 'flat_world_z_m': flat_z, 'height_m': height, 'pitch_deg': pitch, 'rms_m': residual, 'sample_count': int(road.sum()), 'cell_m': args.cell, 'grid_size': n, 'heightmap_method': {'near': 'metric DA3 support inlier back-projection, cell mean', 'far': 'unknown outside measured support', 'car': 'local interpolation only where neighboring support is measured', 'near_depth_m': args.near_depth, 'ground_inlier_m': args.ground_inlier, 'provenance_codes': {'unknown':0,'visible':1,'interpolated':2}, 'cell_counts': {'near_depth':int(np.count_nonzero(provenance==1)), 'interpolated':int(np.count_nonzero(provenance==2)), 'unknown':int(np.count_nonzero(provenance==0))}}}, 'sector': {'radius_m': args.radius, 'angle_deg': args.angle, 'invisible_wall': True}, 'car': {'image_bbox_xyxy': [x0,y0,x1,y1], 'excluded_image_pixels': int(car.sum()), 'footprint_filled_with_plane': True, 'ground_contact_ray': {'pixel_uv': [u_contact,y1], 'plane_intersection_depth_m': car_depth, 'world_xy_m': [anchor_x,anchor_y]}, 'mesh_fit': mesh_fit, 'initial_orientation_xyzw': car_orientation, 'collision_shape': 'convex hull of fitted Hunyuan mesh', 'box_fit': {'method': 'ground-edge anchor and projected bounding-box search', 'reference_bbox_xyxy': target, 'predicted_bbox_xyxy': best[5], 'predicted_bbox_iou': best[0], 'width_from_bbox_at_ground_depth_m': projected_width, 'height_from_bbox_at_ground_depth_m': projected_height}, 'depth_m': car_depth, 'size_m': [width,length,box_h], 'volume_m3': mesh_volume, 'density_kg_m3': args.density, 'mass_kg': mass, 'initial_position_m': car_pos}, 'mesh': {'vertices': len(vertices), 'triangles': len(indices)//3}}
-    scene['geometry_diagnostics'] = {'original_view_ground_rms_m':residual, 'ground_inlier_pixels':int(depth_road.sum()), 'measured_height_range_m':[float(np.min(grid_z[measured])) if measured.any() else None,float(np.max(grid_z[measured])) if measured.any() else None], 'static_candidate_count':len(components), 'static_collider_count':sum(c['collision_enabled'] for c in components)}
+    scene['geometry_diagnostics'] = {'original_view_ground_rms_m':residual, 'ground_inlier_pixels':int(road.sum()), 'measured_height_range_m':[float(np.min(grid_z[measured])) if measured.any() else None,float(np.max(grid_z[measured])) if measured.any() else None], 'static_candidate_count':len(components), 'static_collider_count':sum(c['collision_enabled'] for c in components)}
     scene['support_evidence'] = {'file':'heightmap.npz', 'codes':{'unknown':0,'visible':1,'interpolated':2}, 'visible_cells':int(np.count_nonzero(support_codes==1)), 'interpolated_cells':int(np.count_nonzero(support_codes==2)), 'unknown_cells':int(np.count_nonzero(support_codes==0)), 'traversable_cells':int(traversable.sum()), 'boundary':'edges of traversable cells'}
     scene['entities'] = [{'id': 1, 'role': 'support', 'motion': 'fixed', 'collider': 'heightmap.npz'},
                          {'id': 2, 'role': 'controlled_subject', 'motion': 'dynamic',

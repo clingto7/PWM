@@ -32,3 +32,36 @@ class StageContractCliTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class ResumeAndContactCliTest(unittest.TestCase):
+    def test_saved_scene_rejects_changed_geometry_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root/'scene.json').write_text('{}')
+            subprocess.run([sys.executable, str(CONTRACT), 'record', str(root), 'scene',
+                '--input', 'scene.json', '--output', 'scene.json',
+                '--implementation', 'first_image', '--version', '1', '--seconds', '1',
+                '--parameters', '{"cell_m": 0.5, "radius_m": 27}'], check=True, capture_output=True)
+            result = subprocess.run([sys.executable, str(CONTRACT), 'check-resume', str(root),
+                '--parameters', '{"cell_m": 1.0, "radius_m": 27}'], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn('cell_m', result.stderr)
+            compatible = subprocess.run([sys.executable, str(CONTRACT), 'check-resume', str(root),
+                '--parameters', '{"cell_m": 0.5, "radius_m": 27}'], capture_output=True)
+            self.assertEqual(compatible.returncode, 0, compatible.stderr)
+
+    def test_physics_contract_requires_contact_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root/'scene.json').write_text('{}')
+            (root/'trajectory.json').write_text('[]')
+            (root/'contacts.json').write_text('{"schema": 1, "cases": {}}')
+            subprocess.run([sys.executable, str(CONTRACT), 'record', str(root), 'physics',
+                '--input', 'scene.json', '--output', 'trajectory.json',
+                '--output', 'contacts.json', '--implementation', 'PyBulletSolver',
+                '--version', '1', '--seconds', '1'], check=True, capture_output=True)
+            self.assertEqual(subprocess.run([sys.executable, str(CONTRACT), 'check', str(root),
+                'physics'], capture_output=True).returncode, 0)
+            (root/'contacts.json').unlink()
+            self.assertEqual(subprocess.run([sys.executable, str(CONTRACT), 'check', str(root),
+                'physics'], capture_output=True).returncode, 2)

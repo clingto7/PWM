@@ -186,3 +186,10 @@ writes `stage_status.json` with the failing stage and reason. The read-only
 `check.py` verifies new contracts when present and keeps legacy runs compatible.
 The current ticket uses saved DA3/SAM/Hunyuan outputs; raw-image inference is
 part of later tickets.
+
+Scene resume rejects any changed scene geometry or obstacle setting recorded in
+the saved scene contract (for example `--cell` or `--radius`). Physics now writes
+`contacts.json` with a versioned per-case contact and penetration record; the
+physics contract hashes it, and the checker compares it with the run record.
+`first_image_stages.py` owns PyBullet world creation, solves, and raster output;
+`first_image_pipeline.py` coordinates these stage calls and writes provenance.

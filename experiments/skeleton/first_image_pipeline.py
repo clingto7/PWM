@@ -20,7 +20,8 @@ from raster_replay import render_saved
 from physics import PyBulletSolver
 from artifacts import SceneArtifacts
 from scene import reconstruct
-from stage_contracts import record as record_stage, check as check_stage
+from first_image_stages import solve_saved_scene, render_saved_scene
+from stage_contracts import record as record_stage, validate_resume
 
 
 
@@ -50,7 +51,13 @@ def build(args):
         import shutil
         from types import SimpleNamespace
         saved = args.resume_scene.resolve()
-        saved_scene = check_stage(saved, 'scene')
+        saved_scene = validate_resume(saved, {
+            'radius_m': args.radius, 'angle_deg': args.angle, 'cell_m': args.cell,
+            'near_depth_m': args.near_depth, 'ground_inlier_m': args.ground_inlier,
+            'obstacle_height_m': args.obstacle_height,
+            'obstacle_min_pixels': args.obstacle_min_pixels,
+            'obstacle_min_cells': args.obstacle_min_cells,
+            'obstacles_render_only': args.obstacles_render_only})
         if saved_scene['inputs'] != {f'inputs/{name}': digest(inputs[key]) for key, name in {'image':'input.jpg', 'da3':'prediction.npz', 'sam_car':'car_mask.png', 'hunyuan_mesh':'car_shape.glb'}.items()}:
             raise ValueError('saved scene inputs differ from current bundle')
         for name in SceneArtifacts.NAMES:
@@ -61,7 +68,6 @@ def build(args):
     scene_artifacts=reconstruction.artifacts
     scene_artifacts.files()
     scene=json.loads((out/'scene.json').read_text())
-    geometry=scene_artifacts.load()
     k=np.asarray(scene['camera']['intrinsics'])
     h,w=280,504
     car=np.asarray(Image.open(inputs['sam_car']).convert('L').resize((w,h),Image.Resampling.NEAREST))>127
@@ -78,100 +84,27 @@ def build(args):
     with np.load(out/'obstacles.npz') as data: component_ids=data['instance_id']
     with np.load(out/'heightmap.npz') as data:
         tops=data['surface_z_exact_m'] if 'surface_z_exact_m' in data else data['surface_z_m']
-    origin_x=-(component_ids.shape[0]-1)/2*args.cell
     road_count=scene['obstacles']['road_cells']
     road_false=scene['obstacles']['road_false_positive_cells']
     false_ratio=scene['obstacles']['road_false_positive_ratio']
     write_json(out/'stage_status.json', {'stage':'physics','status':'running'})
-    sim_start = time.perf_counter()
-    client = p.connect(p.DIRECT)
-    try:
-        solver=PyBulletSolver(p)
-        ground, body, obstacle_bodies = solver.create_world(geometry,args,out)
-        inertia_diagonal=list(p.getDynamicsInfo(body,-1)[2])
-        shape_counts={instance_id:len(p.getCollisionShapeData(obstacle_body,-1)) for obstacle_body,instance_id in obstacle_bodies.items()}
-        for component in components:
-            component['collision_shape_count']=shape_counts[component['instance_id']]
-            if bool(component['collision_shape_count'])==args.obstacles_render_only:
-                raise RuntimeError('obstacle collision shape disagrees with fallback mode')
-        scene['contact_friction']={'ground_lateral_friction':args.friction,'car_lateral_friction':1.0,'effective_ground_car_friction':args.friction,'obstacle_lateral_friction':0.0}
-        scene['physics_sleep']={'car_activation_state':'enable_sleeping','activation_state_value':p.ACTIVATION_STATE_ENABLE_SLEEPING}
-        write_json(out/'scene.json',scene)
-        targets=[]
-        for cy,cx in np.argwhere(component_ids>0):
-            x,y=origin_x+cx*args.cell,cy*args.cell
-            distance=math.hypot(x-car_pos[0],y-car_pos[1])
-            if distance>max(width,length) and tops[cy,cx]>car_pos[2]:
-                targets.append((distance,x,y,int(component_ids[cy,cx])))
-        obstacle_target=min(targets) if targets else None
-        if obstacle_target:
-            distance,x,y,target_id=obstacle_target
-            direction=np.array([x-car_pos[0],y-car_pos[1],0.])/distance
-            half_extent=abs(direction[0])*width/2+abs(direction[1])*length/2+args.cell/2
-            travel_to_contact=max(0.,distance-half_extent)
-            obstacle_speed=min(15.,max(args.obstacle_min_speed,math.sqrt(2*args.friction*9.81*travel_to_contact+1.0)))
-        else:
-            direction=np.array([0.,1.,0.]);obstacle_speed=args.speed;target_id=None
-        impulses={'coast':[0.,args.speed,0.], 'ballistic':[0.,args.speed,args.ballistic_up_speed], 'obstacle':(direction*obstacle_speed).tolist()}
-        specifications={name:{'delta_velocity_m_s':velocity,'magnitude_n_s':mass*math.sqrt(sum(v*v for v in velocity)), 'direction':(np.asarray(velocity)/math.sqrt(sum(v*v for v in velocity))).tolist(),'application_point':'center_of_mass','application_point_world_m':car_pos,'target_obstacle_id':target_id if name=='obstacle' else None} for name,velocity in impulses.items()}
-        trajectories={};penetrations={};replays={};hits={}
-        for name,velocity in impulses.items():
-            if name!='coast':
-                p.disconnect(client);client=p.connect(p.DIRECT)
-                ground,body,obstacle_bodies=solver.create_world(geometry,args,out)
-            case_rows,penetrations[name],hits[name]=solver.solve(body,obstacle_bodies,velocity,args.seconds)
-            p.disconnect(client);client=p.connect(p.DIRECT)
-            ground,body,obstacle_bodies=solver.create_world(geometry,args,out)
-            replay,_,_=solver.solve(body,obstacle_bodies,velocity,args.seconds)
-            trajectories[name]=case_rows;replays[name]=replay
-            prefix='' if name=='coast' else name+'/'
-            if name!='coast': (out/name).mkdir()
-            write_json(out/(prefix+'trajectory.json'),case_rows)
-            write_json(out/(prefix+'replay_trajectory.json'),replay)
-        rows=trajectories['coast'];penetration=penetrations['coast'];replay_identical=rows==replays['coast']
-        write_json(out/'impulses.json',specifications)
-        sim_time=time.perf_counter()-sim_start
-        p.disconnect(client);client=p.connect(p.DIRECT)
-        ground,body,obstacle_bodies=solver.create_world(SceneArtifacts(out).load(),args,out)
-        write_json(out/'stage_status.json', {'stage':'raster','status':'running'})
-        render_start=time.perf_counter()
-        near,far=.1,max(100,args.radius*4)
-        fx,fy,cx0,cy0=float(k[0,0]),float(k[1,1]),float(k[0,2]),float(k[1,2])
-        projection=[2*fx/w,0,0,0,0,2*fy/h,0,0,1-2*cx0/w,2*cy0/h-1,(far+near)/(near-far),-1,0,0,2*far*near/(near-far),0]
-        view=p.computeViewMatrix([0,0,0],camera_forward,camera_up)
-        depth_dir=out/'depth'; ids_dir=out/'instance_id'; depth_dir.mkdir();ids_dir.mkdir()
-        depth_video=out/'depth.mp4'; id_video=out/'instance_id.mp4'
-        def encoder(path):
-            return subprocess.Popen(['ffmpeg','-hide_banner','-loglevel','error','-y','-f','rawvideo','-pix_fmt','gray','-s',f'{w}x{h}','-r','30','-i','-','-an','-c:v','libx264','-pix_fmt','yuv420p',str(path)],stdin=subprocess.PIPE)
-        enc_depth,enc_id=encoder(depth_video),encoder(id_video)
-        renderer=RasterRenderer(p,w,h,near,far,view,projection,ground,body,obstacle_bodies,args.radius,args.seconds)
-        try:
-            first_ids,raster_frame_times=renderer.render(rows,depth_dir,ids_dir,(enc_depth,enc_id))
-        finally:
-            enc_depth.stdin.close();enc_id.stdin.close()
-            if enc_depth.wait() != 0 or enc_id.wait() != 0:
-                raise RuntimeError('ffmpeg failed')
-        # Store pixel runs from the actual first ID render and resized SAM mask.
-        def runs(mask):
-            result=[]
-            for row in range(h):
-                active=np.flatnonzero(mask[row])
-                if active.size:
-                    cuts=np.where(np.diff(active)>1)[0]
-                    starts=np.r_[0,cuts+1]; ends=np.r_[cuts,active.size-1]
-                    result.extend([row,int(active[i]),int(active[j])+1] for i,j in zip(starts,ends))
-            return result
-        reference_runs=runs(car)
-        rendered_runs=runs(first_ids==2)
-        overlap=int(np.count_nonzero(car & (first_ids==2)))
-        union=int(np.count_nonzero(car | (first_ids==2)))
-        py,px=np.nonzero(first_ids==2)
-        actual_bbox=[int(px.min()),int(py.min()),int(px.max())+1,int(py.max())+1] if len(px) else None
-        projection_evidence={'reference_runs_y_x0_x1':reference_runs,'rendered_runs_y_x0_x1':rendered_runs,'reference_bbox_xyxy':target,'rendered_bbox_xyxy':actual_bbox,'intersection_pixels':overlap,'union_pixels':union,'mask_iou':overlap/union if union else 0,'frame':'instance_id/0000.png'}
-        write_json(out/'initial_projection.json',projection_evidence)
-        render_time=time.perf_counter()-render_start
-    finally:
-        p.disconnect(client)
+    physics_result = solve_saved_scene(out, args, scene, component_ids, tops)
+    inertia_diagonal = physics_result['inertia_diagonal']
+    trajectories = physics_result['trajectories']
+    penetrations = physics_result['penetrations']
+    hits = physics_result['hits']
+    specifications = physics_result['specifications']
+    impulses = physics_result['impulses']
+    sim_time = physics_result['sim_time']
+    rows = trajectories['coast']
+    penetration = penetrations['coast']
+    replay_identical = rows == physics_result['replays']['coast']
+    write_json(out/'stage_status.json', {'stage':'raster','status':'running'})
+    render_result = render_saved_scene(out, args, scene, car, target, rows)
+    raster_frame_times = render_result['raster_frame_times']
+    projection_evidence = render_result['projection_evidence']
+    actual_bbox = render_result['actual_bbox']
+    render_time = render_result['render_time']
     replay_frame_times=render_saved(out,out/'raster_replay',{'radius_m':args.radius,'friction':args.friction,'obstacles_render_only':args.obstacles_render_only,'seconds':args.seconds})
     def in_camera(row):
         rotation=np.asarray(p.getMatrixFromQuaternion(row[3:7])).reshape(3,3)
@@ -193,7 +126,7 @@ def build(args):
     record['impulse_cases']={name:{'trajectory':('' if name=='coast' else name+'/')+'trajectory.json','replay':('' if name=='coast' else name+'/')+'replay_trajectory.json','impulse':specifications[name],'inertia_diagonal_kg_m2':inertia_diagonal,'max_contact_penetration_m':penetrations[name],'obstacle_contact_samples_by_id':hits[name]} for name in impulses}
     record['parameters']['ballistic_up_speed_m_s']=args.ballistic_up_speed
     record['measurements']['ballistic_in_camera']=ballistic_visible
-    record['stages']['simulation_replay']['outputs'].update({name:outputs[name] for name in outputs if name.startswith(('ballistic/','obstacle/')) or name=='impulses.json'})
+    record['stages']['simulation_replay']['outputs'].update({name:outputs[name] for name in outputs if name.startswith(('ballistic/','obstacle/')) or name in ('impulses.json','contacts.json')})
     record['scene_artifacts']=list(SceneArtifacts.NAMES)
     record['adapters']={'physics':'PyBulletSolver','main_renderer':'RasterRenderer','comparison_renderer':'gsplat' if args.render_gaussians else None}
     record['required_renderers']=['raster'] + (['gaussian'] if args.render_gaussians else [])
@@ -218,7 +151,8 @@ def build(args):
                  'first_image.impulses', '1', {'speed_m_s': args.speed}, 0.0)
     trajectory_files = ['trajectory.json', 'replay_trajectory.json',
                         'ballistic/trajectory.json', 'ballistic/replay_trajectory.json',
-                        'obstacle/trajectory.json', 'obstacle/replay_trajectory.json']
+                        'obstacle/trajectory.json', 'obstacle/replay_trajectory.json',
+                        'contacts.json']
     record_stage(out, 'physics', [*SceneArtifacts.NAMES, 'impulses.json'], trajectory_files,
                  'PyBulletSolver', str(p.getAPIVersion()),
                  record['stages']['simulation_replay']['parameters'], sim_time)

@@ -30,6 +30,15 @@ def check(root):
                 integrity['input:'+name]=False
                 continue
         integrity['input:'+name]=path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest()==entry['sha256']
+    if record.get('stage_contract_schema') == 1:
+        try:
+            contacts = json.loads((root/'contacts.json').read_text())
+            integrity['contacts_record'] = contacts.get('schema') == 1 and all(
+                contacts['cases'][name]['max_contact_penetration_m'] == case['max_contact_penetration_m']
+                and contacts['cases'][name]['obstacle_contact_samples_by_id'] == case['obstacle_contact_samples_by_id']
+                for name, case in record['impulse_cases'].items())
+        except (OSError, ValueError, KeyError, TypeError):
+            integrity['contacts_record'] = False
     for stage in record.get('stages',{}).values():
         for name,expected in stage['outputs'].items():
             integrity['stage_output:'+name]=record['outputs'].get(name)==expected

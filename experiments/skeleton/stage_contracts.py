@@ -56,6 +56,14 @@ def check(root, stage):
     return data
 
 
+def validate_resume(root, parameters):
+    saved = check(root, 'scene')
+    for key, expected in saved['parameters'].items():
+        if key not in parameters or parameters[key] != expected:
+            raise ValueError(f'incompatible saved scene setting: {key}')
+    return saved
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
@@ -71,12 +79,17 @@ def main():
     verify = sub.add_parser('check')
     verify.add_argument('root', type=Path)
     verify.add_argument('stage')
+    resume = sub.add_parser('check-resume')
+    resume.add_argument('root', type=Path)
+    resume.add_argument('--parameters', required=True)
     args = parser.parse_args()
     try:
         if args.command == 'record':
             value = record(args.root, args.stage, args.input, args.output,
                            args.implementation, args.version,
                            json.loads(args.parameters), args.seconds)
+        elif args.command == 'check-resume':
+            value = validate_resume(args.root, json.loads(args.parameters))
         else:
             value = check(args.root, args.stage)
         print(json.dumps(value, sort_keys=True))

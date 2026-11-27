@@ -182,6 +182,8 @@ class BulletRasterSession:
             self.ground,self.body,self.obstacles=PyBulletSolver(p).create_world(
                 geometry,self.args,self.artifacts.root)
             camera=geometry.scene['camera']
+            self.camera_forward=camera['forward']
+            self.camera_up=camera['up']
             self.view=p.computeViewMatrix([0,0,0],camera['forward'],camera['up'])
             return self
         except BaseException:
@@ -190,6 +192,16 @@ class BulletRasterSession:
 
     def __exit__(self, *_):
         self.p.disconnect(self.client)
+
+    def set_camera_yaw(self, yaw_deg):
+        """Rotate the saved camera about its up axis for a nearby geometry view."""
+        forward=np.asarray(self.camera_forward,dtype=float)
+        up=np.asarray(self.camera_up,dtype=float)
+        axis=up/np.linalg.norm(up)
+        angle=math.radians(yaw_deg)
+        direction=(forward*math.cos(angle)+np.cross(axis,forward)*math.sin(angle)
+                   +axis*np.dot(axis,forward)*(1-math.cos(angle)))
+        self.view=self.p.computeViewMatrix([0,0,0],direction.tolist(),up.tolist())
 
     def frame(self, row):
         p=self.p

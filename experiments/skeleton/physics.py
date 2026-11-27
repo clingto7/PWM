@@ -63,7 +63,7 @@ class PyBulletSolver:
                 'max_penetration_m': penetration, 'passive_drift_m': drift,
                 'steps': steps, 'thresholds_m': {'gap': .15, 'penetration': .10, 'drift': .25}}
 
-    def create_world(self, geometry, args, out):
+    def create_world(self, geometry, args, out, contact_erp=0.1):
         p=self.p
         vertices=geometry.vertices; indices=geometry.indices
         components=geometry.components; obstacle_meshes=geometry.obstacle_meshes
@@ -76,7 +76,7 @@ class PyBulletSolver:
         p.setGravity(0,0,-9.81)
         p.setTimeStep(1/240)
         p.setPhysicsEngineParameter(fixedTimeStep=1/240, numSolverIterations=100,
-                                    deterministicOverlappingPairs=1, contactERP=0.1)
+                                    deterministicOverlappingPairs=1, contactERP=contact_erp)
         ground_collision = p.createCollisionShape(p.GEOM_MESH, vertices=vertices, indices=indices, flags=p.GEOM_FORCE_CONCAVE_TRIMESH)
         ground_visual = p.createVisualShape(p.GEOM_MESH, vertices=vertices, indices=indices, rgbaColor=[.5,.5,.5,1])
         ground = p.createMultiBody(0, ground_collision, ground_visual)

@@ -29,7 +29,8 @@ def run_case(geometry, settings, velocity, seconds, variant):
     client = p.connect(p.DIRECT)
     try:
         solver = PyBulletSolver(p)
-        ground, body, _ = solver.create_world(geometry, settings, Path(settings.root))
+        ground, body, _ = solver.create_world(geometry, settings, Path(settings.root),
+                                               contact_erp=variant['parameters']['contactERP'])
         p.setPhysicsEngineParameter(**variant['parameters'])
         effective_parameters = p.getPhysicsEngineParameters()
         inertia = p.getDynamicsInfo(body, -1)[2]

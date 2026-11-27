@@ -47,9 +47,11 @@ ground uses the nominal coefficient and the car uses 1.0, so the effective
 coast coefficient matches the recorded nominal value. The obstacle impulse
 is sized from estimated distance to first contact plus a small arrival speed,
 avoiding the large overspeed seen in the first A800 measurement.
-The default obstacle minimum launch speed is 6 m/s, independently of the
-3 m/s coast and ballistic speed; this was the lowest measured speed that
-contacted the selected obstacle in the second A800 diagnostic. PyBullet's
+The obstacle launch speed is 1.15 times the greater of the 6 m/s configured
+minimum and the point-mass contact estimate, capped at 15 m/s; its effective
+floor is 6.9 m/s, independently of the 3 m/s coast and ballistic speed. The
+6 m/s minimum was the lowest speed observed to contact the selected obstacle
+in the second A800 diagnostic. PyBullet's
 normal rigid-body sleeping is explicitly enabled and recorded for the car so
 terminal contact jitter can settle without editing trajectory velocities.
 The existing 0.001 m/s final linear-speed gate remains unchanged.

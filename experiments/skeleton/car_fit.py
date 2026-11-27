@@ -43,13 +43,6 @@ def support_gap(bottom, pose, ground_z, support):
     return float(np.median(gaps))
 
 
-def align_contact_height(plane_z, body_height, signed_gap):
-    """Place the body's lower contact witness on reconstructed support."""
-    if signed_gap is None or not math.isfinite(signed_gap):
-        raise ValueError('no finite reconstructed support contact for subject fit')
-    return plane_z + body_height/2 - signed_gap
-
-
 def raster_depth(vertices, faces, k, right, forward, normal, scale, yaw, x, y, ground_z, shape):
     """CPU triangle z-buffer in the original camera, with perspective-correct depth."""
     h, w = shape
@@ -117,12 +110,12 @@ def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, 
     h, w = mask.shape
     target = cv2.resize(mask.astype('uint8'), (w//2, h//2), interpolation=cv2.INTER_NEAREST)
     fx, fy, cx, cy = k[0,0], k[1,1], k[0,2], k[1,2]
-    def projected(points, scale, yaw, x, y, vertical_shift=0.0):
+    def projected(points, scale, yaw, x, y):
         co, si = math.cos(yaw), math.sin(yaw)
         xyz = points * scale
         wx = xyz[:,0]*co-xyz[:,1]*si+x
         wy = xyz[:,0]*si+xyz[:,1]*co+y
-        wz = xyz[:,2]+ground_z+vertical_shift
+        wz = xyz[:,2]+ground_z
         optical = wx[:,None]*right + wy[:,None]*forward + wz[:,None]*normal
         valid = optical[:,1] > .1
         if not valid.all():
@@ -190,12 +183,9 @@ def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, 
     size = (span*scale).tolist()
     ratios = [size[i]/REAL_SIZE_M[i] for i in range(3)]
     after = evidence(selected.x)
-    raw_gap = contact_error(selected.x)
-    aligned_z = align_contact_height(ground_z, size[2], raw_gap)
-    support_shift = aligned_z - (ground_z + size[2]/2)
-    def rendered_metrics(pose, metrics, vertical_shift=0.0):
+    def rendered_metrics(pose, metrics):
         rendered = raster_depth(local, mesh.faces, k, right, forward, normal,
-                                *pose, ground_z+vertical_shift, mask.shape)
+                                *pose, ground_z, mask.shape)
         visible = np.isfinite(rendered)
         overlap = mask & visible & np.isfinite(depth) & (depth > 0)
         metrics['visible_depth_pixel_count'] = int(overlap.sum())
@@ -203,16 +193,14 @@ def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, 
                                           if np.any(overlap) else None)
         metrics['rendered_silhouette_iou'] = float(np.count_nonzero(mask & visible) /
             max(1, np.count_nonzero(mask | visible)))
-        gap = contact_error(pose)
-        metrics['support_contact_gap_m'] = None if gap is None else gap+vertical_shift
+        metrics['support_contact_gap_m'] = contact_error(pose)
     if 'valid_projection' not in before:
         rendered_metrics(initial, before)
-    rendered_metrics(selected.x, after, support_shift)
+    rendered_metrics(selected.x, after)
     if diagnostic_dir is not None:
         diagnostic_dir.mkdir(exist_ok=True)
         for name, pose in (('before', initial), ('after', selected.x)):
-            candidate = projected(sample, *pose,
-                                  vertical_shift=support_shift if name == 'after' else 0.0)
+            candidate = projected(sample, *pose)
             visual = np.zeros((h, w, 3), dtype=np.uint8)
             visual[mask, 1] = 200
             if candidate is not None:
@@ -221,8 +209,8 @@ def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, 
                 cv2.fillConvexPoly(outline, hull_pixels, 1)
                 visual[outline.astype(bool), 2] = 200
             cv2.imwrite(str(diagnostic_dir/f'{name}.png'), visual)
-    # A segmentation score cannot establish a model-specific size class. Only
-    # independently recorded classifier evidence can enable the frozen prior.
+    # No class classifier is part of the observation contract. Segmentation confidence
+    # cannot establish a semantic size class, so the frozen prior stays ineligible.
     alternatives = [float(result.fun)]
     for factor in (.8, 1.2):
         trial = result.x.copy(); trial[0] *= factor
@@ -230,14 +218,12 @@ def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, 
     uncertainty = {'method': 'objective profile at +/-20 percent scale',
                    'relative_scale_probe': [.8, 1., 1.2], 'objective': [alternatives[1], alternatives[0], alternatives[2]]}
     choice_records = fit_choice_records(result, prior_result, use_weak_prior)
-    return fitted, {'scale':scale, 'yaw_rad':yaw, 'position_m':[x,y,aligned_z],
+    return fitted, {'scale':scale, 'yaw_rad':yaw, 'position_m':[x,y,ground_z+size[2]/2],
                     'size_m':size, 'size_check':{'reference_model':'MINI Cooper S Convertible (2021)',
                     'reference_size_m':REAL_SIZE_M, 'source':REAL_SIZE_SOURCE,
                     'fit_to_reference_ratio':ratios, 'reasonable':all(.7 <= r <= 1.3 for r in ratios)},
                     'fit_objective':float(objective(selected.x)), 'observed_car_depth_m':observed_depth,
                     'ground_contact_error_m':after['support_contact_gap_m'],
-                    'pre_alignment_support_gap_m': raw_gap,
-                    'support_alignment_shift_m': support_shift,
                     'diagnostics': {'before': before, 'after': after},
                     'scale_uncertainty': uncertainty,
                     **choice_records,

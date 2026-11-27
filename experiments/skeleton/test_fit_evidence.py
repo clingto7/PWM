@@ -2,7 +2,7 @@ import unittest
 import numpy as np
 from types import SimpleNamespace
 
-from car_fit import eligible_prior, raster_depth, support_gap, align_contact_height, fit_choice_records
+from car_fit import eligible_prior, raster_depth, support_gap, fit_choice_records
 
 
 class FitEvidenceTest(unittest.TestCase):
@@ -28,16 +28,6 @@ class FitEvidenceTest(unittest.TestCase):
         bottom = np.array([[0, 0, 0], [.1, 0, 0]])
         support = (np.array([[.12]]), np.array([[True]]), 0, 1)
         self.assertAlmostEqual(support_gap(bottom, (1, 0, 0, 0), 0, support), -.12)
-
-    def test_contact_alignment_moves_body_to_support_without_changing_size(self):
-        self.assertAlmostEqual(align_contact_height(-1.6, .8, .02), -1.22)
-        self.assertAlmostEqual(align_contact_height(-1.6, .8, -.03), -1.17)
-        bottom = np.array([[0, 0, 0], [.1, 0, 0]])
-        support = (np.array([[.12]]), np.array([[True]]), 0, 1)
-        initial_gap = support_gap(bottom, (1, 0, 0, 0), 0, support)
-        aligned_bottom_z = align_contact_height(0, 0, initial_gap)
-        self.assertAlmostEqual(support_gap(bottom, (1, 0, 0, 0), aligned_bottom_z,
-                                            support), 0, places=12)
 
     def test_opt_in_prior_keeps_distinct_no_prior_scale_and_pose(self):
         baseline = SimpleNamespace(x=np.array([1.1, .2, 2., 3.]), fun=.12)

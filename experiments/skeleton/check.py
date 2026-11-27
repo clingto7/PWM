@@ -125,12 +125,7 @@ def check(root):
             stages.get(stage,{}).get('inputs',{}).get(name)==record['outputs'].get(name)
             for stage,names in required.items() for name in names)
         checks['mesh_record']=all(name in record['outputs'] for name in ('fitted_car.obj','car_collision_hull.obj')) and fit==m['mesh_fit'] and all(math.isfinite(v) and v>0 for v in size) and math.isfinite(fit['scale']) and fit['scale']>0 and box['collision_shape']=='convex hull of fitted Hunyuan mesh'
-        if 'support_alignment_shift_m' in fit:
-            checks['mesh_ground_contact']=(abs(fit['ground_contact_error_m'])<.01
-                and abs(fit['position_m'][2]-size[2]/2-surface-fit['support_alignment_shift_m'])<1e-6
-                and abs(fit['pre_alignment_support_gap_m']+fit['support_alignment_shift_m'])<1e-6)
-        else:
-            checks['mesh_ground_contact']=abs(fit['position_m'][2]-size[2]/2-surface)<.01
+        checks['mesh_ground_contact']=abs(fit['position_m'][2]-size[2]/2-surface)<.01
         checks['size_reasonableness_record']=fit['size_check']['reasonable']==all(.7<=v<=1.3 for v in fit['size_check']['fit_to_reference_ratio'])
         from PIL import Image
         image=Image.open(root/'instance_id/0000.png')

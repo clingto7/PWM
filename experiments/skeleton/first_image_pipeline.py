@@ -21,7 +21,7 @@ from physics import PyBulletSolver
 from artifacts import SceneArtifacts
 from scene import reconstruct
 from first_image_stages import solve_saved_scene, render_saved_scene
-from stage_contracts import record as record_stage, validate_resume
+from stage_contracts import record as record_stage, validate_resume, check as check_stage
 
 
 
@@ -139,9 +139,22 @@ def build(args):
     # Persist independent, hash-checked boundaries after all legacy outputs exist.
     input_files = list(bundled.values())
     parameters = record['parameters']
+    observation_implementation = 'saved DA3 Nested + SAM 2.1 Tiny'
+    observation_parameters = {'depth_scale': 'metric_m', 'camera': 'intrinsics'}
+    if args.bundle and (args.bundle/'stages/observation.json').is_file():
+        source_observation = check_stage(args.bundle, 'observation')
+        source_depth = check_stage(args.bundle, 'depth')
+        source_segmentation = check_stage(args.bundle, 'segmentation')
+        observation_implementation = source_observation['implementation']
+        observation_parameters = {
+            **observation_parameters,
+            'depth_implementation': source_depth['implementation'],
+            'segmentation_implementation': source_segmentation['implementation'],
+            'depth_parameters': source_depth['parameters'],
+            'segmentation_parameters': source_segmentation['parameters'],
+            'selection_sha256': digest(args.bundle/'selection.json')}
     record_stage(out, 'observation', input_files[:3], input_files[:3],
-                 'saved DA3 Nested + SAM 2.1 Tiny', '1',
-                 {'depth_scale': 'metric_m', 'camera': 'intrinsics'}, observation_time)
+                 observation_implementation, '1', observation_parameters, observation_time)
     record_stage(out, 'subject_mesh', [bundled['hunyuan_mesh']], [bundled['hunyuan_mesh']],
                  'saved Hunyuan3D 2.1', '1', {}, 0.0)
     record_stage(out, 'scene', input_files, SceneArtifacts.NAMES,

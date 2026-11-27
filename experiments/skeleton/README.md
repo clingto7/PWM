@@ -193,3 +193,24 @@ the saved scene contract (for example `--cell` or `--radius`). Physics now write
 physics contract hashes it, and the checker compares it with the run record.
 `first_image_stages.py` owns PyBullet world creation, solves, and raster output;
 `first_image_pipeline.py` coordinates these stage calls and writes provenance.
+# Ticket 16: original-image observation
+
+`observation.py` accepts an original screenshot and emits a checked bundle for
+`first_image_pipeline.py`. With local DA3 Nested and SAM 2.1 Large weights at
+`experiments/first_image/models/{da3nested,sam21large}`:
+
+```sh
+python experiments/skeleton/observation.py IMAGE.jpg OBSERVATION_DIR --mesh SAVED_MESH.glb
+python experiments/skeleton/observation.py check OBSERVATION_DIR observation
+python experiments/skeleton/first_image_pipeline.py RUN_DIR --bundle OBSERVATION_DIR
+```
+
+`--mesh` supplies a saved mesh only for the current-image downstream proxy;
+automatic subject mesh generation belongs to ticket 17. For local development
+without model inference, pass `--depth-source` and `--segmentation-source` to
+directories containing saved `run.json` and model output files. Each slot can
+be changed independently. The observation saves all SAM candidates and scores
+in `selection.json`, the selected mask, a depth capability declaration, model
+identities, weights hashes, elapsed time, and hash-checked stage records. A
+relative-depth or missing-camera result fails before creating an accepted
+bundle.

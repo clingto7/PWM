@@ -12,6 +12,11 @@ Use the five default triage labels. See `docs/agents/triage-labels.md`.
 
 Use a single-context domain layout. See `docs/agents/domain.md`.
 
+### Cross-image pilot
+
+When running or evaluating Spec #14 across game screenshots, see
+`docs/agents/cross-image-pilot.md`.
+
 ## A800 server usage
 
 Use the `a800` SSH alias and the assigned PWM directory

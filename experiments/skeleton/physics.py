@@ -46,6 +46,23 @@ class PyBulletSolver:
                     obstacle_contacts[instance_id]=obstacle_contacts.get(instance_id,0)+1
         return rows,penetration,obstacle_contacts
 
+    def trial_without_impulse(self, body, support, steps=120):
+        """Measure initial support contact and passive settling in the adapter world."""
+        p = self.p
+        start = np.asarray(p.getBasePositionAndOrientation(body)[0], dtype=float)
+        initial_contacts = p.getClosestPoints(body, support, distance=2.0)
+        initial_gap = min((float(q[8]) for q in initial_contacts), default=float('inf'))
+        penetration = max(0.0, -initial_gap)
+        for _ in range(steps):
+            p.stepSimulation()
+            penetration = max(penetration, max((max(0.0, -float(q[8])) for q in p.getContactPoints(bodyA=body)), default=0.0))
+        end = np.asarray(p.getBasePositionAndOrientation(body)[0], dtype=float)
+        drift = float(np.linalg.norm(end-start))
+        trusted = bool(initial_gap <= .15 and penetration <= .10 and drift <= .25)
+        return {'trusted': trusted, 'initial_support_gap_m': initial_gap,
+                'max_penetration_m': penetration, 'passive_drift_m': drift,
+                'steps': steps, 'thresholds_m': {'gap': .15, 'penetration': .10, 'drift': .25}}
+
     def create_world(self, geometry, args, out):
         p=self.p
         vertices=geometry.vertices; indices=geometry.indices
@@ -117,6 +134,12 @@ def solve_saved_scene(out, args, scene, component_ids, tops, actions=None):
     client = p.connect(p.DIRECT)
     try:
         solver=PyBulletSolver(p)
+        ground, body, obstacle_bodies = solver.create_world(geometry,args,out)
+        trial = solver.trial_without_impulse(body, ground)
+        write_json(out/'fit_trial.json', trial)
+        if not trial['trusted']:
+            raise ValueError('untrusted initial subject fit: see fit_trial.json')
+        p.disconnect(client); client=p.connect(p.DIRECT)
         ground, body, obstacle_bodies = solver.create_world(geometry,args,out)
         inertia_diagonal=list(p.getDynamicsInfo(body,-1)[2])
         shape_counts={instance_id:len(p.getCollisionShapeData(obstacle_body,-1)) for obstacle_body,instance_id in obstacle_bodies.items()}

@@ -7,8 +7,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent))
-from integrated_chain import check_live_artifacts, check_chain, ledger, digest, run, record_live_stage, LIVE_IMPLEMENTATION
+from integrated_chain import check_live_artifacts, check_chain, ledger, digest, run, record_live_stage
 from types import SimpleNamespace
+
+
+ADAPTER_IMPLEMENTATION = {'session': 'live_session.LiveSession',
+                          'solver': 'test_live_session.FakeSource',
+                          'renderer': 'test_live_session.FakeSource.frame_current'}
 
 
 class IntegratedChainTest(unittest.TestCase):
@@ -121,7 +126,7 @@ class IntegratedChainTest(unittest.TestCase):
             (root/'scene/fit_trial.json').write_text(json.dumps({'trusted': True,
                 'initial_support_gap_m': .01, 'max_penetration_m': .01, 'passive_drift_m': .01}))
             (root/'live/session.json').write_text(json.dumps({'inputs_unchanged': True,
-                'implementation': LIVE_IMPLEMENTATION, 'steps_per_control': 8,
+                'implementation': ADAPTER_IMPLEMENTATION, 'steps_per_control': 8,
                 'physics_hz': 240, 'scene_and_observation_sha256': {
                     'scene/run.json': digest(root/'scene/run.json'),
                     'observation/inputs/input.jpg': digest(root/'observation/inputs/input.jpg')}}))
@@ -163,7 +168,7 @@ class IntegratedChainTest(unittest.TestCase):
             (root/'observation/input.jpg').write_bytes(b'input')
             (root/'controls.json').write_text('[[1,0,0]]')
             (root/'live/session.json').write_text(json.dumps({
-                'implementation': LIVE_IMPLEMENTATION, 'steps_per_control': 8,
+                'implementation': ADAPTER_IMPLEMENTATION, 'steps_per_control': 8,
                 'physics_hz': 240, 'scene_and_observation_sha256': {
                     'scene/run.json': digest(root/'scene/run.json'),
                     'observation/input.jpg': digest(root/'observation/input.jpg')}}))
@@ -173,7 +178,16 @@ class IntegratedChainTest(unittest.TestCase):
             record_live_stage(root, .5)
             from integrated_chain import check_live_stage
             chain = {'timings_s': {'live': .5}}
-            self.assertEqual(check_live_stage(root, chain)['implementation'], LIVE_IMPLEMENTATION)
+            self.assertEqual(check_live_stage(root, chain)['implementation'], ADAPTER_IMPLEMENTATION)
+            session = json.loads((root/'live/session.json').read_text())
+            session['implementation']['solver'] = ''
+            (root/'live/session.json').write_text(json.dumps(session))
+            record_live_stage(root, .5)
+            with self.assertRaisesRegex(ValueError, 'live stage contract mismatch'):
+                check_live_stage(root, chain)
+            session['implementation'] = ADAPTER_IMPLEMENTATION
+            (root/'live/session.json').write_text(json.dumps(session))
+            record_live_stage(root, .5)
             (root/'controls.json').write_text('[[2,0,0]]')
             with self.assertRaisesRegex(ValueError, 'hash mismatch'):
                 check_live_stage(root, chain)

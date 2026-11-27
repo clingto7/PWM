@@ -37,6 +37,14 @@ def hashes(root):
     return {str(p.resolve().relative_to(root.parent.resolve())): hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
 
 
+def implementation_identity(session, source):
+    def name(value):
+        kind = type(value)
+        return f'{kind.__module__}.{kind.__qualname__}'
+    return {'session': name(session), 'solver': name(source),
+            'renderer': f'{name(source)}.frame_current'}
+
+
 def raster_source(root):
     from artifacts import SceneArtifacts
     artifacts = SceneArtifacts(root)
@@ -94,6 +102,7 @@ class LiveSession:
         self.before = hashes(self.root) if self.source is None else {str((self.root/'scene.json').relative_to(self.root.parent)): hashlib.sha256((self.root/'scene.json').read_bytes()).hexdigest()}
         self.output.mkdir(parents=True, exist_ok=True)
         self.source = (self.source or raster_source(self.root)).__enter__()
+        self.implementation = implementation_identity(self, self.source)
         self.initialization_s = time.perf_counter()-started
         self.rows.append(self._state())
         self.last_return = time.perf_counter()
@@ -157,8 +166,7 @@ class LiveSession:
                 for key in ('waiting_s','physics_s','raster_s','writing_s','response_latency_s')}})
             after = {name: hashlib.sha256((self.root.parent/name).read_bytes()).hexdigest() for name in self.before}
             write_json(self.output/'session.json', {'schema': 1, 'scene_and_observation_sha256': self.before,
-                'implementation': {'session': 'live_session.LiveSession',
-                    'solver': 'physics.BulletRasterSession', 'renderer': 'physics.BulletRasterSession.frame_current'},
+                'implementation': self.implementation,
                 'inputs_unchanged': after == self.before, 'steps_per_control': self.steps_per_control,
                 'physics_hz': 240, 'state_format': 'position_xyz,orientation_xyzw,linear_velocity_xyz,angular_velocity_xyz',
                 'trajectory': 'trajectory.json', 'contacts': 'contacts.json', 'steps': 'steps.jsonl'})

@@ -75,6 +75,10 @@ class LiveSessionTest(unittest.TestCase):
             self.assertEqual((root/'scene.json').read_text(), '{}')
             self.assertEqual(len(json.loads((output/'trajectory.json').read_text())), 3)
             self.assertEqual(len(json.loads((output/'contacts.json').read_text())), 2)
+            implementation = json.loads((output/'session.json').read_text())['implementation']
+            self.assertEqual(implementation, {'session': 'live_session.LiveSession',
+                'solver': f'{FakeSource.__module__}.FakeSource',
+                'renderer': f'{FakeSource.__module__}.FakeSource.frame_current'})
             timing = json.loads((output/'timings.json').read_text())
             self.assertEqual(len(timing['steps']), 2)
             self.assertEqual(timing['distribution_s']['response_latency_s']['count'], 2)

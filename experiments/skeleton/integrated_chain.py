@@ -29,11 +29,6 @@ def inside(root, name):
     return path
 
 
-LIVE_IMPLEMENTATION = {'session': 'live_session.LiveSession',
-                       'solver': 'physics.BulletRasterSession',
-                       'renderer': 'physics.BulletRasterSession.frame_current'}
-
-
 def live_files(root, directory):
     return sorted(str(path.relative_to(root)) for path in (root/directory).rglob('*') if path.is_file())
 
@@ -54,9 +49,11 @@ def check_live_stage(root, chain):
     timing = json.loads((root/'live/timings.json').read_text())
     expected_inputs = {'controls.json', *live_files(root, 'scene'), *live_files(root, 'observation')}
     expected_outputs = set(live_files(root, 'live'))
+    identity = session.get('implementation')
     if (set(stage['inputs']) != expected_inputs or set(stage['outputs']) != expected_outputs
-            or stage.get('implementation') != LIVE_IMPLEMENTATION
-            or session.get('implementation') != LIVE_IMPLEMENTATION
+            or not isinstance(identity, dict) or set(identity) != {'session', 'solver', 'renderer'}
+            or any(not isinstance(value, str) or not value.strip() for value in identity.values())
+            or stage.get('implementation') != identity
             or stage.get('parameters') != {'steps_per_control': session.get('steps_per_control'),
                                          'physics_hz': session.get('physics_hz')}
             or stage.get('timing') != timing

@@ -8,7 +8,7 @@ import numpy as np
 import json
 import time
 from artifacts import SceneArtifacts
-from physics_actions import action_records
+from physics_actions import action_records, obstacle_launch_speed
 
 
 def write_json(path, value):
@@ -77,7 +77,7 @@ class PyBulletSolver:
         p.setTimeStep(1/240)
         parameters = {'fixedTimeStep':1/240, 'numSolverIterations':100,
                       'deterministicOverlappingPairs':1}
-        parameters.update({'contactERP':0.1} if solver_parameters is None else solver_parameters)
+        parameters.update({'contactERP':0.025} if solver_parameters is None else solver_parameters)
         p.setPhysicsEngineParameter(**parameters)
         ground_collision = p.createCollisionShape(p.GEOM_MESH, vertices=vertices, indices=indices, flags=p.GEOM_FORCE_CONCAVE_TRIMESH)
         ground_visual = p.createVisualShape(p.GEOM_MESH, vertices=vertices, indices=indices, rgbaColor=[.5,.5,.5,1])
@@ -154,7 +154,7 @@ def solve_saved_scene(out, args, scene, component_ids, tops, actions=None):
         scene['physics_sleep']={'car_activation_state':'enable_sleeping','activation_state_value':p.ACTIVATION_STATE_ENABLE_SLEEPING}
         scene['physics_solver']={'fixed_time_step_s':1/240, 'solver_iterations':100,
                                  'deterministic_overlapping_pairs':True,
-                                 'contact_erp':0.1,
+                                 'contact_erp':0.025,
                                  'split_impulse':'bullet_default',
                                  'effective_engine_parameters':p.getPhysicsEngineParameters()}
         write_json(out/'scene.json',scene)
@@ -171,7 +171,7 @@ def solve_saved_scene(out, args, scene, component_ids, tops, actions=None):
             direction=np.array([x-car_pos[0],y-car_pos[1],0.])/distance
             half_extent=abs(direction[0])*width/2+abs(direction[1])*length/2+args.cell/2
             travel_to_contact=max(0.,distance-half_extent)
-            obstacle_speed=min(15.,max(args.obstacle_min_speed,math.sqrt(2*args.friction*9.81*travel_to_contact+1.0)))
+            obstacle_speed=obstacle_launch_speed(args.friction,travel_to_contact,args.obstacle_min_speed)
         else:
             direction=np.array([0.,1.,0.]);obstacle_speed=args.speed;target_id=None
         impulses = actions if actions is not None else {'coast':[0.,args.speed,0.], 'ballistic':[0.,args.speed,args.ballistic_up_speed], 'obstacle':(direction*obstacle_speed).tolist()}

@@ -549,6 +549,13 @@ class CheckCliTest(unittest.TestCase):
             far=altered_case('coast',lambda rows:rows[-1].__setitem__(1,expected_coast+.021))
             self.assertTrue(near['checks']['analytical_distance'])
             self.assertFalse(far['checks']['analytical_distance'])
+            uphill=altered_case('coast',lambda rows:(rows[-1].__setitem__(2,.509),
+                rows[-1].__setitem__(1,expected_coast-.009/.5-.019)))
+            uphill_far=altered_case('coast',lambda rows:(rows[-1].__setitem__(2,.509),
+                rows[-1].__setitem__(1,expected_coast-.009/.5-.021)))
+            self.assertTrue(uphill['checks']['analytical_distance'])
+            self.assertFalse(uphill_far['checks']['analytical_distance'])
+            self.assertAlmostEqual(uphill['metrics']['expected_distance_m'],expected_coast-.009/.5)
             landing=int(cases['ballistic']['metrics']['flight_time_s']*240)
             range_near=altered_case('ballistic',lambda rows:rows[landing].__setitem__(1,4/9.81+.049))
             range_far=altered_case('ballistic',lambda rows:rows[landing].__setitem__(1,4/9.81+.051))

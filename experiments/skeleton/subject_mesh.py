@@ -199,8 +199,11 @@ def hunyuan21(image, mask, output, weights):
     mesh = pipeline(image=rgba, num_inference_steps=30, guidance_scale=5.0,
                     octree_resolution=256)[0]
     inference_seconds = time.perf_counter()-inference_start
+    export_start = time.perf_counter()
     mesh.export(output/'car_shape.glb')
+    export_seconds = time.perf_counter()-export_start
     return {'load_seconds': load_seconds, 'inference_seconds': inference_seconds,
+            'mesh_export_seconds': export_seconds,
             'weight_sha256': digest(weights/'hunyuan3d-dit-v2-1/model.fp16.ckpt')}
 
 
@@ -230,8 +233,10 @@ def build(image, mask, output, saved_mesh=None, provider='hunyuan3d21', weights=
                 if (expected.get('original_image_sha256') != digest(output/'inputs/input.jpg') or
                         expected.get('selected_mask_sha256') != digest(output/'inputs/car_mask.png')):
                     raise ValueError('saved mesh image or selected mask hash mismatch')
+            copy_start = time.perf_counter()
             shutil.copyfile(saved_mesh, output/'car_shape.glb')
-            provenance = {'saved_mesh_sha256': digest(Path(saved_mesh))}
+            provenance = {'saved_mesh_sha256': digest(Path(saved_mesh)),
+                          'saved_mesh_copy_seconds': time.perf_counter()-copy_start}
             implementation = 'saved Hunyuan3D 2.1 mesh'
         elif provider == 'hunyuan3d21':
             provenance = hunyuan21(image, mask, output, weights)

@@ -84,8 +84,8 @@ def check_chain(root):
         if not path.is_file() or digest(path) != expected:
             raise ValueError(f'upstream changed since live session: {name}')
     result = check_live_artifacts(live)
-    actual_files = {str(path.relative_to(root)) for directory in (observation, scene, live)
-                    for path in directory.rglob('*') if path.is_file()}
+    actual_files = {str(path.relative_to(root)) for path in root.rglob('*')
+                    if path.is_file() and path != root/'chain.json'}
     if actual_files != set(chain['artifact_sha256']):
         raise ValueError('chain output file ledger differs')
     for relative, expected in chain['artifact_sha256'].items():
@@ -93,7 +93,8 @@ def check_chain(root):
             raise ValueError(f'chain output hash mismatch: {relative}')
     return {'status': 'complete', 'selected_index': selected, 'rejected_indices':
             [c['index'] for c in selection['candidates'] if c['index'] != selected],
-            'live': result, 'replay': 'python integrated_chain.py replay CHAIN NEW_OUTPUT'}
+            'live': result, 'timing_evidence': timing_evidence(root),
+            'replay': 'python integrated_chain.py replay CHAIN NEW_OUTPUT'}
 
 
 def execute(command):
@@ -103,8 +104,32 @@ def execute(command):
 
 
 def ledger(root):
-    return {str(path.relative_to(root)): digest(path) for directory in ('observation', 'scene', 'live')
-            for path in sorted((root/directory).rglob('*')) if path.is_file()}
+    return {str(path.relative_to(root)): digest(path) for path in sorted(root.rglob('*'))
+            if path.is_file() and path != root/'chain.json'}
+
+
+def timing_evidence(root):
+    observation = root/'observation'; scene = root/'scene'; live = root/'live'
+    depth = check_stage(observation, 'depth')
+    segmentation = check_stage(observation, 'segmentation')
+    mesh = json.loads((observation/'mesh/subject_mesh.json').read_text())
+    run = json.loads((scene/'run.json').read_text())
+    live_times = json.loads((live/'timings.json').read_text())
+    return {
+        'da3': depth.get('timing', {'scope': 'unmeasured'}),
+        'sam': segmentation.get('timing', {'scope': 'unmeasured'}),
+        'hunyuan': {'scope': mesh['implementation'], **mesh['timing_s']},
+        'fit_s': {key: run['timings_s'].get(key) for key in
+                  ('support_plane_fit', 'support_contact_fit', 'subject_scale_pose_search',
+                   'candidate_rendering', 'writing')},
+        'offline_s': {key: run['timings_s'].get(key) for key in
+                      ('simulation_and_replay', 'render_and_video', 'total')},
+        'offline_raster_per_frame_s': run.get('raster_frame_times_s'),
+        'live_initialization_s': live_times['initialization_s'],
+        'live_per_step_s': live_times['steps'],
+        'video_writing_s': live_times.get('optional_video_writing_s'),
+        'warm_model_inference_s': None,
+        'scope': 'offline semantic acceptance and live session are separate; saved-source copy is not warm inference; conversion is unseparated where provider has no counter'}
 
 
 def replay_downstream(source, output):
@@ -173,6 +198,11 @@ def run(args):
                  'input_sha256': digest(args.image), 'artifact_sha256': ledger(root), 'timings_s':
                  {**times, 'total': time.perf_counter()-started},
                  'baseline': {'source': 'spec14-live-original-8963c94', 'total_s': 477.87195,
+                              'observation_through_raster_s': 443.93775,
+                              'proxy_render_s': 31.80805,
+                              'stage_s': {'observation_wrapper': .0226, 'subject_mesh': 65.5466,
+                                          'scene': 155.9717, 'physics': 154.9669,
+                                          'raster': 15.8654, 'proxy_render': 31.6801},
                               'comparison': 'compare only matching cold observation/mesh/scene/physics/raster definitions; live is additional and saved-source copies are not inference'}}
         write(root/'chain.json', chain)
         check_chain(root)

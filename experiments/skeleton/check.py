@@ -36,6 +36,14 @@ def check(root):
         for name,expected in stage['inputs'].items():
             source=record['inputs'].get(name,{}).get('sha256',record['outputs'].get(name))
             integrity['stage_input:'+name]=source==expected
+    if record.get('stage_contract_schema') == 1:
+        from stage_contracts import check as check_stage
+        for stage in record.get('stage_contracts', {}):
+            try:
+                check_stage(root, stage)
+                integrity['contract:'+stage] = True
+            except (ValueError, OSError, KeyError, json.JSONDecodeError):
+                integrity['contract:'+stage] = False
     def pixels(runs):
         return {(y,x) for y,x0,x1 in runs for x in range(x0,x1)}
     reference=pixels(projection['reference_runs_y_x0_x1'])

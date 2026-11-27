@@ -25,18 +25,19 @@ def specific_energy(row, inertia, mass):
             + 9.81*row[2])
 
 
-def run_case(geometry, settings, velocity, seconds, variant):
+def run_case(geometry, settings, velocity, seconds, variant, target_id=None):
     import pybullet as p
     client = p.connect(p.DIRECT)
     try:
         solver = PyBulletSolver(p)
-        ground, body, _ = solver.create_world(geometry, settings, Path(settings.root),
+        ground, body, obstacles = solver.create_world(geometry, settings, Path(settings.root),
                                                solver_parameters=variant['parameters'])
         effective_parameters = p.getPhysicsEngineParameters()
         inertia = p.getDynamicsInfo(body, -1)[2]
         mass = geometry.mass
-        p.resetBaseVelocity(body, linearVelocity=velocity)
+        p.resetBaseVelocity(body, linearVelocity=[v*variant.get('speed_scale', 1.) for v in velocity])
         rows = []
+        target_contact_samples = 0
         for frame in range(int(seconds*solver.hz)):
             if frame:
                 p.stepSimulation()
@@ -44,6 +45,7 @@ def run_case(geometry, settings, velocity, seconds, variant):
             vel, omega = p.getBaseVelocity(body)
             row = [*pos, *quat, *vel, *omega]
             contacts = p.getContactPoints(bodyA=body)
+            target_contact_samples += any(obstacles.get(c[2]) == target_id for c in contacts) if target_id is not None else 0
             rows.append((specific_energy(row, inertia, mass), row,
                          min((float(c[8]) for c in contacts), default=None), len(contacts)))
         # Match check.py: omit stationary frame, then compare consecutive steps.
@@ -51,6 +53,8 @@ def run_case(geometry, settings, velocity, seconds, variant):
         gain, frame = max(gains)
         before, after = rows[frame-1], rows[frame]
         return {'variant': variant['name'], 'parameters': variant['parameters'],
+                'speed_scale': variant.get('speed_scale', 1.),
+                'target_contact_samples': target_contact_samples,
                 'effective_engine_parameters': effective_parameters,
                 'max_step_specific_energy_gain_j_kg': max(0., gain),
                 'peak_frame': frame, 'peak_time_s': frame/solver.hz,
@@ -70,7 +74,7 @@ def run_case(geometry, settings, velocity, seconds, variant):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('run_directory', type=Path)
-    parser.add_argument('--action', choices=('coast', 'ballistic'), default='ballistic')
+    parser.add_argument('--action', choices=('coast', 'ballistic', 'obstacle'), default='ballistic')
     args = parser.parse_args()
     root = args.run_directory
     geometry = SceneArtifacts(root).load()
@@ -116,7 +120,12 @@ def main():
                                                         'splitImpulsePenetrationThreshold': -0.04,
                                                         'contactERP': 0.025}},
     ]
-    results = [run_case(geometry, settings, velocity, params['seconds'], v)
+    if action == 'obstacle':
+        variants = [variants[0]] + [
+            {'name': f'obstacle_speed_{scale:.2f}', 'parameters': {'contactERP':0.025},
+             'speed_scale':scale} for scale in (1.0, 1.1, 1.2, 1.3)]
+    target_id = impulses[action]['target_obstacle_id']
+    results = [run_case(geometry, settings, velocity, params['seconds'], v, target_id)
                for v in variants]
     baseline = results[0]
     reproduced = abs(baseline['max_step_specific_energy_gain_j_kg']-saved_gain) <= 1e-9

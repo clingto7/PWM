@@ -263,10 +263,27 @@ counts each missing or failed run as a failure.
 
 Run development first. Before viewing holdout images, freeze the code revision,
 config hash, per-image failure conditions, five numeric thresholds (detection
-IoU minimum, geometry depth MAE maximum in metres, contact penetration maximum
+IoU minimum, geometry contact-fit RMS maximum in metres, contact penetration maximum
 in metres, render IoU minimum, total seconds maximum), and aggregate success
 minimum in a versioned freeze JSON. Commit that freeze JSON before opening
 holdout. Use `evaluation.py DATASET --freeze FREEZE --split holdout` only after
 that commit. Report per-game and per-scene failures, all five metrics, and the
 eligible denominator. The current first-image gates are not cross-game
 thresholds; no values are frozen yet and no cross-game trial is claimed.
+
+For each completed run, score the saved source-view projection against an
+independent scoring-only subject annotation (`schema: 1`,
+`subject_runs_y_x0_x1`: `[y,x0,x1]` pixel spans):
+
+```sh
+python experiments/skeleton/evaluation.py --run RUN_DIR --annotation SUBJECT.json --output SCORE_DIR
+```
+
+This writes `evaluation.json` with detection/render IoU, saved semantic-check
+contact-fit RMS and maximum penetration, total wall time, and hashes for the
+image, config, chain and annotation plus the code revision. The dataset points
+to each score directory. Seal the freeze JSON by setting `sealed_sha256` to
+the SHA-256 of canonical sorted compact JSON without that field, and pin that
+digest in dataset `freeze_sha256`. The holdout scorer rejects an altered seal,
+revision/config mismatch, or image/annotation mismatch. Commit the seal and
+dataset pin before holdout inspection.

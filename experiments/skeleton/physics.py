@@ -8,7 +8,7 @@ import numpy as np
 import json
 import time
 from artifacts import SceneArtifacts
-from physics_actions import action_records
+from physics_actions import action_records, obstacle_launch_speed
 
 
 def write_json(path, value):
@@ -171,7 +171,7 @@ def solve_saved_scene(out, args, scene, component_ids, tops, actions=None):
             direction=np.array([x-car_pos[0],y-car_pos[1],0.])/distance
             half_extent=abs(direction[0])*width/2+abs(direction[1])*length/2+args.cell/2
             travel_to_contact=max(0.,distance-half_extent)
-            obstacle_speed=min(15.,max(args.obstacle_min_speed,math.sqrt(2*args.friction*9.81*travel_to_contact+1.0)))
+            obstacle_speed=obstacle_launch_speed(args.friction,travel_to_contact,args.obstacle_min_speed)
         else:
             direction=np.array([0.,1.,0.]);obstacle_speed=args.speed;target_id=None
         impulses = actions if actions is not None else {'coast':[0.,args.speed,0.], 'ballistic':[0.,args.speed,args.ballistic_up_speed], 'obstacle':(direction*obstacle_speed).tolist()}

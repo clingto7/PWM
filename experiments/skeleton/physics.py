@@ -20,6 +20,13 @@ def api_version():
     return pybullet.getAPIVersion()
 
 
+def contact_solver_parameters():
+    """Resolve mesh contacts within each 240 Hz recorded state."""
+    return {'fixedTimeStep': 1/240, 'numSubSteps': 8,
+            'numSolverIterations': 100, 'useSplitImpulse': 1,
+            'deterministicOverlappingPairs': 1, 'contactERP': 0.025}
+
+
 class PyBulletSolver:
     def __init__(self, bullet, hz=240):
         self.p=bullet
@@ -75,9 +82,12 @@ class PyBulletSolver:
         car_pos=geometry.car_pos; car_orientation=geometry.car_orientation
         p.setGravity(0,0,-9.81)
         p.setTimeStep(1/240)
-        parameters = {'fixedTimeStep':1/240, 'numSolverIterations':100,
-                      'deterministicOverlappingPairs':1}
-        parameters.update({'contactERP':0.025} if solver_parameters is None else solver_parameters)
+        # Resolve the reconstructed mesh contact eight times per recorded
+        # state. Split impulse corrects overlap in position without injecting
+        # the correction into the body's kinetic energy.
+        parameters = contact_solver_parameters()
+        if solver_parameters is not None:
+            parameters.update(solver_parameters)
         p.setPhysicsEngineParameter(**parameters)
         ground_collision = p.createCollisionShape(p.GEOM_MESH, vertices=vertices, indices=indices, flags=p.GEOM_FORCE_CONCAVE_TRIMESH)
         ground_visual = p.createVisualShape(p.GEOM_MESH, vertices=vertices, indices=indices, rgbaColor=[.5,.5,.5,1])
@@ -152,10 +162,13 @@ def solve_saved_scene(out, args, scene, component_ids, tops, actions=None):
                 raise RuntimeError('obstacle collision shape disagrees with fallback mode')
         scene['contact_friction']={'ground_lateral_friction':args.friction,'car_lateral_friction':1.0,'effective_ground_car_friction':args.friction,'obstacle_lateral_friction':args.friction,'restitution':0.0}
         scene['physics_sleep']={'car_activation_state':'enable_sleeping','activation_state_value':p.ACTIVATION_STATE_ENABLE_SLEEPING}
-        scene['physics_solver']={'fixed_time_step_s':1/240, 'solver_iterations':100,
-                                 'deterministic_overlapping_pairs':True,
-                                 'contact_erp':0.025,
-                                 'split_impulse':'bullet_default',
+        settings=contact_solver_parameters()
+        scene['physics_solver']={'fixed_time_step_s':settings['fixedTimeStep'],
+                                 'solver_iterations':settings['numSolverIterations'],
+                                 'substeps_per_recorded_state':settings['numSubSteps'],
+                                 'split_impulse':bool(settings['useSplitImpulse']),
+                                 'deterministic_overlapping_pairs':bool(settings['deterministicOverlappingPairs']),
+                                 'contact_erp':settings['contactERP'],
                                  'effective_engine_parameters':p.getPhysicsEngineParameters()}
         write_json(out/'scene.json',scene)
         targets=[]

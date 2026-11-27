@@ -25,6 +25,13 @@ def fit_choice_records(no_prior, prior, use_weak_prior):
             'selected_fit': 'weak_prior' if use_weak_prior else 'no_prior'}
 
 
+def visible_fit_score(iou, depth_mae, contact_gap, observed_depth, anchor_depth):
+    if depth_mae is None or contact_gap is None:
+        return float('inf')
+    return (1-iou + .12*depth_mae/max(observed_depth, 1)
+            + .03*abs(contact_gap)/max(anchor_depth, 1))
+
+
 def support_gap(bottom, pose, ground_z, support):
     """Signed bottom-surface gap to reconstructed support cells under the pose."""
     grid, valid_grid, origin, cell = support
@@ -162,6 +169,38 @@ def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, 
     initial = [1., 0., anchor_xy[0], anchor_xy[1]]
     before = evidence(initial) or {'valid_projection': False}
     result = differential_evolution(objective, bounds, seed=42, maxiter=35, popsize=6, polish=True, workers=1)
+    # A vertex depth sample can prefer the rear-facing side of a mesh. Include
+    # the original silhouette/median-depth optimum and rank both headings with
+    # a visible-surface z-buffer against the actual image evidence.
+    def silhouette_objective(v):
+        projection = projected(sample, *v)
+        if projection is None:
+            return 10
+        pixels, optical_depth = projection
+        depth_error = abs(float(np.median(optical_depth))-observed_depth)/max(observed_depth, 1)
+        anchor_error = abs(float(np.min(optical_depth))-anchor_depth)/max(anchor_depth, 1)
+        return 1-silhouette(pixels)+.12*depth_error+.03*anchor_error
+    silhouette_result = differential_evolution(silhouette_objective, bounds,
+        seed=42, maxiter=35, popsize=6, polish=True, workers=1)
+    candidates = []
+    for source, base in (('sampled_depth', result.x), ('silhouette_depth', silhouette_result.x)):
+        for flip in (False, True):
+            pose = base.copy()
+            if flip:
+                pose[1] = (pose[1]+2*math.pi) % (2*math.pi)-math.pi
+            rendered = raster_depth(local, mesh.faces, k, right, forward, normal,
+                                    *pose, ground_z, mask.shape)
+            visible = np.isfinite(rendered)
+            overlap = mask & visible & np.isfinite(depth) & (depth > 0)
+            iou = np.count_nonzero(mask & visible)/max(1, np.count_nonzero(mask | visible))
+            mae = float(np.mean(np.abs(rendered[overlap]-depth[overlap]))) if np.any(overlap) else None
+            score = visible_fit_score(iou, mae, contact_error(pose), observed_depth, anchor_depth)
+            candidates.append({'source': source, 'flipped': flip, 'score': score,
+                               'visible_iou': float(iou), 'visible_depth_mae_m': mae,
+                               'pose': pose})
+    winner = min(candidates, key=lambda item: item['score'])
+    result.x = winner['pose']
+    result.fun = float(objective(result.x))
     prior_enabled = eligible_prior(category_evidence)
     prior_result = None
     if prior_enabled:
@@ -225,6 +264,8 @@ def fit(mesh_path, mask, depth, k, right, forward, normal, ground_z, anchor_xy, 
                     'fit_objective':float(objective(selected.x)), 'observed_car_depth_m':observed_depth,
                     'ground_contact_error_m':after['support_contact_gap_m'],
                     'diagnostics': {'before': before, 'after': after},
+                    'visible_candidate_ranking': [{key: value for key, value in candidate.items() if key != 'pose'}
+                                                  for candidate in candidates],
                     'scale_uncertainty': uncertainty,
                     **choice_records,
                     'weak_category_prior': {'eligible': prior_enabled, 'classification_evidence_threshold': PRIOR_CONFIDENCE,

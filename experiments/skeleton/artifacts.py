@@ -5,7 +5,18 @@ height layers, obstacle IDs, and fitted visual/collision car meshes. Paths are
 relative to a single run directory so the artifact set can be moved intact.
 """
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
+
+
+def artifact_hashes(paths):
+    """Snapshot the exact bytes handed to physics and rendering."""
+    return {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
+
+
+def require_unchanged(expected, stage):
+    if artifact_hashes(map(Path, expected)) != expected:
+        raise RuntimeError(f'{stage} changed saved scene or observation artifacts')
 
 
 @dataclass(frozen=True)

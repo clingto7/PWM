@@ -17,7 +17,7 @@ from bundle import sources, copy_inputs, revision
 from raster import RasterRenderer
 from raster_replay import render_saved
 from physics import api_version
-from artifacts import SceneArtifacts
+from artifacts import SceneArtifacts, artifact_hashes, require_unchanged
 from scene import reconstruct
 from first_image_stages import render_saved_scene
 from physics import solve_saved_scene
@@ -102,15 +102,9 @@ def build(args):
     road_false=scene['obstacles']['road_false_positive_cells']
     false_ratio=scene['obstacles']['road_false_positive_ratio']
     write_json(out/'stage_status.json', {'stage':'physics','status':'running'})
-    upstream_hashes = {name: digest(out/name) for name in SceneArtifacts.NAMES}
-    upstream_hashes.update({name: digest(path) for name, path in inputs.items()})
-    def check_upstream(stage):
-        current = {name: digest(out/name) for name in SceneArtifacts.NAMES}
-        current.update({name: digest(path) for name, path in inputs.items()})
-        if current != upstream_hashes:
-            raise RuntimeError(f'{stage} changed saved scene or observation artifacts')
+    upstream_hashes = artifact_hashes([*(out/name for name in SceneArtifacts.NAMES), *inputs.values()])
     physics_result = solve_saved_scene(out, args, scene, component_ids, tops)
-    check_upstream('physics')
+    require_unchanged(upstream_hashes, 'physics')
     inertia_diagonal = physics_result['inertia_diagonal']
     trajectories = physics_result['trajectories']
     penetrations = physics_result['penetrations']
@@ -123,12 +117,13 @@ def build(args):
     replay_identical = rows == physics_result['replays']['coast']
     write_json(out/'stage_status.json', {'stage':'raster','status':'running'})
     render_result = render_saved_scene(out, args, scene, car, target, rows)
-    check_upstream('renderer')
+    require_unchanged(upstream_hashes, 'renderer')
     raster_frame_times = render_result['raster_frame_times']
     projection_evidence = render_result['projection_evidence']
     actual_bbox = render_result['actual_bbox']
     render_time = render_result['render_time']
     replay_frame_times=render_saved(out,out/'raster_replay',{'radius_m':args.radius,'friction':args.friction,'obstacles_render_only':args.obstacles_render_only,'seconds':args.seconds})
+    require_unchanged(upstream_hashes, 'raster replay')
     def in_camera(row):
         qx,qy,qz,qw=row[3:7]
         rotation=np.asarray([[1-2*(qy*qy+qz*qz),2*(qx*qy-qz*qw),2*(qx*qz+qy*qw)],
@@ -222,6 +217,7 @@ def build(args):
     if args.render_gaussians:
         write_json(out/'stage_status.json', {'stage':'gaussian','status':'running'})
         subprocess.run([sys.executable,str(Path(__file__).with_name('gaussian.py')),str(out)],check=True)
+        require_unchanged(upstream_hashes, 'gaussian renderer')
     write_json(out/'stage_status.json', {'stage':'complete','status':'complete','total_seconds':time.perf_counter()-start})
     print(json.dumps({'run_dir':str(out),'frames':int(args.seconds*30),'measurements':record['measurements']},indent=2))
 

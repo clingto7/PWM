@@ -17,6 +17,31 @@ CONCLUDE=CHECK.with_name('conclude.py')
 
 
 class CheckCliTest(unittest.TestCase):
+    def test_saved_session_rejects_scene_or_observation_hash_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); rec=self.fixture(root)
+            image=root/'inputs/input.jpg'; image.parent.mkdir()
+            image.write_bytes(b'original observation')
+            rec['inputs']['image']={'path':'inputs/input.jpg',
+                                    'sha256':hashlib.sha256(image.read_bytes()).hexdigest()}
+            session={'schema':1, 'scene_sha256':rec['outputs']['scene.json']}
+            (root/'physics_session.json').write_text(json.dumps(session))
+            rec['outputs']['physics_session.json']=hashlib.sha256((root/'physics_session.json').read_bytes()).hexdigest()
+            (root/'run.json').write_text(json.dumps(rec))
+            valid=json.loads(self.invoke(root).stdout)
+            self.assertTrue(valid['integrity']['physics_session_scene'])
+            self.assertTrue(valid['integrity']['input:image'])
+            session['scene_sha256']='0'*64
+            (root/'physics_session.json').write_text(json.dumps(session))
+            rec['outputs']['physics_session.json']=hashlib.sha256((root/'physics_session.json').read_bytes()).hexdigest()
+            (root/'run.json').write_text(json.dumps(rec))
+            bad=json.loads(self.invoke(root).stdout)
+            self.assertFalse(bad['integrity']['physics_session_scene'])
+            self.assertFalse(bad['checks']['hashes'])
+            image.write_bytes(b'changed observation')
+            bad=json.loads(self.invoke(root).stdout)
+            self.assertFalse(bad['integrity']['input:image'])
+
     def test_incomplete_historical_heightmap_uses_legacy_rest_check(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);rec=self.fixture(root)

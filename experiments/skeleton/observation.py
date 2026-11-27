@@ -78,49 +78,95 @@ def segmentation_live(image_path, destination, weights):
             'method':'uniform 16x9 point prompts; best IoU mask; IoU deduplication'}
 
 
-def select_subject(masks_path, image_path, output):
+def select_subject(masks_path, depth_path, image_path, output):
     import numpy as np
     from PIL import Image
     with np.load(masks_path) as data:
         masks, points, scores = data['masks_256'], data['points_xy'], data['scores']
         indices = data['selected'] if 'selected' in data else np.arange(len(masks))
+    with np.load(depth_path) as prediction:
+        depth = np.asarray(prediction['depth'][0], dtype=np.float32)
+    depth = np.asarray(Image.fromarray(depth).resize((masks.shape[2], masks.shape[1]),
+                       Image.Resampling.BILINEAR))
+    valid = np.isfinite(depth) & (depth > 0)
+    if not valid.any():
+        raise ValueError('DA3 has no valid depth for subject selection')
+    near, far = np.percentile(depth[valid], [10, 90])
+    if far-near < 1e-6:
+        near, far = float(depth[valid].min()), float(depth[valid].max())
+    spread = max(float(far-near), 1e-6)
     width, height = Image.open(image_path).size
     candidates = []
     for idx in indices:
         idx = int(idx)
         mask = masks[idx].astype(bool)
         ys,xs = np.nonzero(mask)
-        if not len(xs):
+        if not len(xs) or (mask & valid).sum() < 20:
             continue
         area = len(xs)/mask.size
         cx,cy = float(xs.mean()/mask.shape[1]),float(ys.mean()/mask.shape[0])
-        # Foreground subject evidence: central, lower-half, coherent instance,
-        # and neither a tiny fragment nor the entire background. No RGB/category.
+        values = depth[mask & valid]
+        median = float(np.median(values))
+        relative_depth = float(np.clip((far-median)/spread, 0, 1))
+        continuity = float(np.clip(1-np.median(np.abs(values-median))/spread*4, 0, 1))
+        # Four-connected boundary gives a resolution-independent compactness cue.
+        padded = np.pad(mask, 1)
+        interior = (padded[1:-1, 1:-1] & padded[:-2, 1:-1] &
+                    padded[2:, 1:-1] & padded[1:-1, :-2] & padded[1:-1, 2:])
+        perimeter = int((mask & ~interior).sum())
+        contour = float(np.clip(4*np.sqrt(len(xs))/max(perimeter, 1), 0, 1))
         center = max(0., 1.-abs(cx-.5)*2.)
-        lower = max(0., 1.-abs(cy-.72)/.72)
-        extent = min(1., area/.025) * max(0., 1.-area/.55)
+        extent = float(np.clip(area/.02, 0, 1))
         quality = float(np.clip(scores[idx],0,1))
-        score = .30*center + .25*lower + .25*extent + .20*quality
+        score = .52*relative_depth + .22*continuity + .13*contour + .08*quality + .03*center + .02*extent
         candidates.append({'index':idx,'score':round(score,6),'model_iou':quality,
+                           'relative_depth':round(relative_depth,6), 'median_depth':median,
+                           'depth_continuity':round(continuity,6), 'contour':round(contour,6),
                            'area_fraction':area,'centroid_xy_fraction':[cx,cy],
                            'bbox_xyxy_256':[int(xs.min()),int(ys.min()),int(xs.max()+1),int(ys.max()+1)],
                            'prompt_xy':points[idx].tolist()})
     candidates.sort(key=lambda value:value['score'], reverse=True)
-    if not candidates or candidates[0]['score'] < .48 or (len(candidates)>1 and
-            candidates[0]['score']-candidates[1]['score'] < .015):
+    # Inspect only the short list. The adjacent strip below the lower silhouette
+    # is a cheap local support cue, not a full support-plane reconstruction.
+    for candidate in candidates[:3]:
+        mask = masks[candidate['index']].astype(bool)
+        support = []
+        for x in np.flatnonzero(mask.any(axis=0)):
+            bottom = int(np.flatnonzero(mask[:, x])[-1])
+            for y in range(bottom+1, min(bottom+7, mask.shape[0])):
+                if valid[y, x] and not mask[y, x]:
+                    support.append(float(depth[y, x]))
+        gap = abs(float(np.median(support))-candidate['median_depth'])/spread if support else None
+        contact = bool(support and gap <= .22)
+        candidate['contact'] = {'supported':contact, 'sample_count':len(support),
+                                'relative_depth_gap':round(gap,6) if gap is not None else None}
+        candidate['final_score'] = round(candidate['score'] + (.12 if contact else 0), 6)
+    eligible = sorted((c for c in candidates[:3] if c['contact']['supported']),
+                      key=lambda c:c['final_score'], reverse=True)
+    reason = None
+    if not eligible:
+        reason = 'no candidate has local support/contact evidence'
+    elif eligible[0]['score'] < .45:
+        reason = 'insufficient depth and contour evidence'
+    elif len(eligible)>1 and eligible[0]['final_score']-eligible[1]['final_score'] < .035:
+        reason = 'near-tied supported candidates'
+    elif candidates[0]['index'] != eligible[0]['index'] and candidates[0]['score']-eligible[0]['score'] > .16:
+        reason = 'foreground occluder conflicts with support/contact evidence'
+    if reason:
         write(output/'selection.json', {'candidates':candidates,'selected_index':None,
-                                        'reason':'no confident dominant subject'})
-        raise ValueError('no confident dominant subject; inspect selection.json')
-    index = candidates[0]['index']
+                                        'reason':reason, 'method':'relative DA3 depth, contour, continuity, local contact'})
+        raise ValueError(reason+'; inspect selection.json')
+    index = eligible[0]['index']
     selected = Image.fromarray(np.uint8(masks[index])*255).resize((width,height),Image.Resampling.NEAREST)
     selected.save(output/'raw_selected_mask.png')
     from subject_mesh import isolate_selected_mask
     cleaned, cleanup = isolate_selected_mask(selected)
     cleaned.save(output/'inputs/car_mask.png')
     write(output/'selection.json', {'candidates':candidates,'selected_index':index,
-                                    'score_margin':candidates[0]['score']-(candidates[1]['score'] if len(candidates)>1 else 0),
+                                    'score_margin':eligible[0]['final_score']-(eligible[1]['final_score'] if len(eligible)>1 else 0),
                                     'cleanup':cleanup,
-                                    'method':'centrality + lower-image position + instance extent + model IoU'})
+                                    'reason':'strongest supported candidate',
+                                    'method':'relative DA3 depth, contour, continuity, local contact'})
 
 
 def build(args):
@@ -171,8 +217,8 @@ def build(args):
     else:
         metadata=segmentation_live(image,out,args.sam_weights)
         implementation=metadata['model']
-    select_subject(out/'sam2_masks.npz',image,out)
-    record(out,'segmentation',['inputs/input.jpg'],['sam2_masks.npz','selection.json','raw_selected_mask.png','inputs/car_mask.png'],
+    select_subject(out/'sam2_masks.npz',out/'inputs/prediction.npz',image,out)
+    record(out,'segmentation',['inputs/input.jpg','inputs/prediction.npz'],['sam2_masks.npz','selection.json','raw_selected_mask.png','inputs/car_mask.png'],
            implementation,'1',{'model':metadata.get('model'),'weight_sha256':metadata.get('weight_sha256'),
                                 'method':metadata.get('method')},time.perf_counter()-start)
     record(out,'observation',['inputs/input.jpg'],['inputs/prediction.npz','inputs/car_mask.png',

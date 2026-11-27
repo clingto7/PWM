@@ -11,6 +11,60 @@ CLI = Path(__file__).with_name('observation.py')
 
 
 class ObservationCliTest(unittest.TestCase):
+    def test_saved_depth_selects_small_upper_subject_and_records_contact(self):
+        import numpy as np
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = root/'image.jpg'
+            Image.new('RGB', (256, 256)).save(image)
+            depth = np.full((1, 256, 256), 12, dtype=np.float32)
+            depth[45:85, 100:140] = 4
+            depth[85:91, 100:140] = 4.4
+            depth[170:235, 80:165] = 9
+            da3 = root/'depth'; da3.mkdir()
+            np.savez_compressed(da3/'prediction.npz', depth=depth, intrinsics=np.eye(3)[None])
+            (da3/'run.json').write_text(json.dumps({'is_metric': True}))
+            masks = np.zeros((2, 256, 256), dtype=bool)
+            masks[0, 45:85, 100:140] = True
+            masks[1, 170:235, 80:165] = True
+            sam = root/'sam'; sam.mkdir()
+            np.savez_compressed(sam/'sam2_masks.npz', masks_256=masks,
+                points_xy=np.array([[120, 60], [120, 200]]), scores=np.array([.95, .95]), selected=np.array([0, 1]))
+            (sam/'run.json').write_text('{}')
+            out = root/'observation'
+            result = subprocess.run([sys.executable, str(CLI), str(image), str(out),
+                '--depth-source', str(da3), '--segmentation-source', str(sam)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            selection = json.loads((out/'selection.json').read_text())
+            self.assertEqual(selection['selected_index'], 0)
+            self.assertIn('relative_depth', selection['candidates'][0])
+            self.assertIn('contact', selection['candidates'][0])
+
+    def test_unsupported_foreground_abstains_before_mesh(self):
+        import numpy as np
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = root/'image.jpg'; Image.new('RGB', (256, 256)).save(image)
+            depth = np.full((1, 256, 256), 20, dtype=np.float32)
+            depth[30:65, 90:130] = 3
+            da3 = root/'depth'; da3.mkdir()
+            np.savez_compressed(da3/'prediction.npz', depth=depth, intrinsics=np.eye(3)[None])
+            (da3/'run.json').write_text(json.dumps({'is_metric': True}))
+            mask = np.zeros((1, 256, 256), dtype=bool); mask[0, 30:65, 90:130] = True
+            sam = root/'sam'; sam.mkdir()
+            np.savez_compressed(sam/'sam2_masks.npz', masks_256=mask,
+                points_xy=np.array([[110, 45]]), scores=np.array([.99]), selected=np.array([0]))
+            (sam/'run.json').write_text('{}')
+            out = root/'observation'
+            result = subprocess.run([sys.executable, str(CLI), str(image), str(out),
+                '--depth-source', str(da3), '--segmentation-source', str(sam)], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            selection = json.loads((out/'selection.json').read_text())
+            self.assertIsNone(selection['selected_index'])
+            self.assertIn('contact', selection['reason'])
+            self.assertFalse((out/'mesh').exists())
     def test_distant_selected_mask_island_does_not_expand_mesh_crop(self):
         import numpy as np
         from PIL import Image
@@ -85,7 +139,8 @@ class ObservationCliTest(unittest.TestCase):
             evidence = json.loads((out/'selection.json').read_text())
             self.assertGreater(len(evidence['candidates']), 1)
             self.assertIn('score', evidence['candidates'][0])
-            self.assertEqual(evidence['selected_index'], evidence['candidates'][0]['index'])
+            self.assertIn(evidence['selected_index'], [c['index'] for c in evidence['candidates']])
+            self.assertTrue(next(c for c in evidence['candidates'] if c['index'] == evidence['selected_index'])['contact']['supported'])
             import numpy as np
             from PIL import Image
             chosen = np.asarray(Image.open(out/'inputs/car_mask.png').convert('L').resize((256,256))) > 127

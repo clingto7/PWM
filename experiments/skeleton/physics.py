@@ -77,7 +77,7 @@ class PyBulletSolver:
         p.setTimeStep(1/240)
         parameters = {'fixedTimeStep':1/240, 'numSolverIterations':100,
                       'deterministicOverlappingPairs':1}
-        parameters.update({'contactERP':0.1} if solver_parameters is None else solver_parameters)
+        parameters.update({'contactERP':0.025} if solver_parameters is None else solver_parameters)
         p.setPhysicsEngineParameter(**parameters)
         ground_collision = p.createCollisionShape(p.GEOM_MESH, vertices=vertices, indices=indices, flags=p.GEOM_FORCE_CONCAVE_TRIMESH)
         ground_visual = p.createVisualShape(p.GEOM_MESH, vertices=vertices, indices=indices, rgbaColor=[.5,.5,.5,1])
@@ -154,7 +154,7 @@ def solve_saved_scene(out, args, scene, component_ids, tops, actions=None):
         scene['physics_sleep']={'car_activation_state':'enable_sleeping','activation_state_value':p.ACTIVATION_STATE_ENABLE_SLEEPING}
         scene['physics_solver']={'fixed_time_step_s':1/240, 'solver_iterations':100,
                                  'deterministic_overlapping_pairs':True,
-                                 'contact_erp':0.1,
+                                 'contact_erp':0.025,
                                  'split_impulse':'bullet_default',
                                  'effective_engine_parameters':p.getPhysicsEngineParameters()}
         write_json(out/'scene.json',scene)

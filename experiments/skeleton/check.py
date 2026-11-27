@@ -235,9 +235,14 @@ def check(root):
             case_metrics={'final_hull_support_clearance_m':clearance(last),'max_penetration_m':penetration,'final_speed_m_s':end_linear_speed,'final_angular_speed_rad_s':end_angular_speed,'max_angular_speed_rad_s':max_angular_speed,'max_step_specific_energy_gain_j_kg':gain}
             if name=='coast':
                 effective_mu=params.get('effective_ground_car_friction',params['friction']**2)
-                expected=speed**2/(2*effective_mu*9.81) if effective_mu else math.inf
+                height_change=last[2]-rows[0][2]
+                # Work-energy balance includes gravity when reconstructed support
+                # rises or falls over the coast path. The flat case is unchanged.
+                expected=max(0.,(speed**2/2-9.81*height_change)/(effective_mu*9.81)) if effective_mu else math.inf
                 actual=math.hypot(last[0]-rows[0][0],last[1]-rows[0][1])
-                case_metrics.update({'coast_distance_m':actual,'expected_distance_m':expected,'distance_error_m':actual-expected})
+                case_metrics.update({'coast_distance_m':actual,'expected_distance_m':expected,
+                                     'distance_error_m':actual-expected,
+                                     'coast_height_change_m':height_change})
                 case_checks['analytical_distance']=gate(abs(actual-expected),limits['coast_distance_error_m'])
             elif name=='ballistic':
                 base=rows[0][2]

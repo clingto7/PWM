@@ -51,6 +51,7 @@ def build(args):
     observation_time = time.perf_counter() - start
     write_json(out/'bundle.json', {'schema': 1, 'inputs': bundled, 'source_sha256': hashes, 'revision': revision(), 'arguments': {key: value for key, value in vars(args).items() if key not in ('output', 'bundle', 'resume_scene')}})
     write_json(out/'stage_status.json', {'stage':'scene','status':'running'})
+    saved_scene = None
     if args.resume_scene:
         import shutil
         from types import SimpleNamespace
@@ -137,9 +138,15 @@ def build(args):
     ballistic_visible=all(in_camera(row) for row in trajectories['ballistic'])
     outputs={str(path.relative_to(out)):digest(path) for path in sorted(out.rglob('*')) if path.is_file() and path.name != 'stage_status.json'}
     record={'schema':2,'inputs':{name:{'path':bundled[name],'sha256':hashes[name]} for name,path in inputs.items()},'outputs':outputs,'parameters':{'radius_m':args.radius,'angle_deg':args.angle,'cell_m':args.cell,'friction':args.friction,'car_lateral_friction':1.0,'effective_ground_car_friction':args.friction,'density_kg_m3':args.density,'derived_mass_kg':mass,'near_depth_m':args.near_depth,'ground_inlier_m':args.ground_inlier,'speed_m_s':args.speed,'obstacle_min_speed_m_s':args.obstacle_min_speed,'car_sleep_activation_state':'enable_sleeping','seconds':args.seconds,'physics_hz':240,'obstacle_height_m':args.obstacle_height,'obstacle_min_pixels':args.obstacle_min_pixels,'obstacle_min_cells':args.obstacle_min_cells,'obstacles_render_only':args.obstacles_render_only,'video_fps':30},'timings_s':{'ground_fit':ground_time,'scene_build':scene_time,'simulation_and_replay':sim_time,'render_and_video':render_time,'total':time.perf_counter()-start},'versions':{'python':platform.python_version(),'numpy':version('numpy'),'pillow':version('pillow'),'pybullet':version('pybullet'),'pybullet_api':api_version(),'ffmpeg':subprocess.check_output(['ffmpeg','-version'],text=True).splitlines()[0]},'measurements':{'max_contact_penetration_m':penetration,'replay_trajectory_identical':replay_identical,'final_position_m':rows[-1][:3],'final_velocity_m_s':rows[-1][7:10],'initial_projection_bbox_xyxy':actual_bbox,'initial_projection_mask_iou':projection_evidence['mask_iou'],'mesh_fit':mesh_fit,'road_false_positive_ratio':false_ratio,'road_false_positive_cells':road_false,'road_cells':road_count,'obstacle_component_sizes_cells':[component['cells'] for component in components],'obstacle_component_count':len(components)}}
-    record['timings_s'].update(scene.get('timings_s', {}))
-    record['timings_s']['writing'] = (reconstruction.writing_seconds +
-                                    mesh_fit.get('timings_s', {}).get('visual_writing', 0.0))
+    if saved_scene is None:
+        record['timings_s'].update(scene.get('timings_s', {}))
+        record['timings_s']['writing'] = (reconstruction.writing_seconds +
+                                        mesh_fit.get('timings_s', {}).get('visual_writing', 0.0))
+    else:
+        record['timings_s']['writing'] = 0.0
+        record['resume_scene_provenance'] = {
+            'scene_stage_seconds': saved_scene['seconds'],
+            'scene_timings_s': scene.get('timings_s', {})}
     record['timings_s']['physical_trial'] = json.loads((out/'fit_trial.json').read_text())['seconds']
     record['stages'] = {
         'ground_fit_scene': {'inputs': hashes, 'outputs': {name:outputs[name] for name in ('scene.json','heightmap.npz','fitted_car.obj','car_collision_hull.obj','obstacles.npz')}, 'parameters': {'radius_m':args.radius,'angle_deg':args.angle,'cell_m':args.cell,'near_depth_m':args.near_depth,'ground_inlier_m':args.ground_inlier,'obstacle_height_m':args.obstacle_height,'obstacle_min_pixels':args.obstacle_min_pixels,'obstacle_min_cells':args.obstacle_min_cells,'obstacles_render_only':args.obstacles_render_only, **fit_settings(args)}, 'seconds':ground_time+scene_time},

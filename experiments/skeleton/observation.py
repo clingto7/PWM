@@ -113,9 +113,13 @@ def select_subject(masks_path, image_path, output):
         raise ValueError('no confident dominant subject; inspect selection.json')
     index = candidates[0]['index']
     selected = Image.fromarray(np.uint8(masks[index])*255).resize((width,height),Image.Resampling.NEAREST)
-    selected.save(output/'inputs/car_mask.png')
+    selected.save(output/'raw_selected_mask.png')
+    from subject_mesh import isolate_selected_mask
+    cleaned, cleanup = isolate_selected_mask(selected)
+    cleaned.save(output/'inputs/car_mask.png')
     write(output/'selection.json', {'candidates':candidates,'selected_index':index,
                                     'score_margin':candidates[0]['score']-(candidates[1]['score'] if len(candidates)>1 else 0),
+                                    'cleanup':cleanup,
                                     'method':'centrality + lower-image position + instance extent + model IoU'})
 
 
@@ -168,11 +172,11 @@ def build(args):
         metadata=segmentation_live(image,out,args.sam_weights)
         implementation=metadata['model']
     select_subject(out/'sam2_masks.npz',image,out)
-    record(out,'segmentation',['inputs/input.jpg'],['sam2_masks.npz','selection.json','inputs/car_mask.png'],
+    record(out,'segmentation',['inputs/input.jpg'],['sam2_masks.npz','selection.json','raw_selected_mask.png','inputs/car_mask.png'],
            implementation,'1',{'model':metadata.get('model'),'weight_sha256':metadata.get('weight_sha256'),
                                 'method':metadata.get('method')},time.perf_counter()-start)
     record(out,'observation',['inputs/input.jpg'],['inputs/prediction.npz','inputs/car_mask.png',
-        'sam2_masks.npz','selection.json','depth_capability.json'],
+        'sam2_masks.npz','selection.json','raw_selected_mask.png','depth_capability.json'],
         'DA3 + SAM 2.1 Large','1',
         {'depth_stage':'stages/depth.json','segmentation_stage':'stages/segmentation.json'},
         check(out,'depth')['seconds']+check(out,'segmentation')['seconds'])

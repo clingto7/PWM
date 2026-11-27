@@ -159,3 +159,37 @@ Bundle source hashes are checked before reproduction, and reproduction output
 must be outside the source bundle.
 
 New heightmaps retain the historical float32 layers and add float64 `ground_z_exact_m` and `surface_z_exact_m` for byte-exact raster replay. `SceneArtifacts.load()` falls back to float32 layers for historical runs.
+
+## Ticket #15 stage contracts
+
+`run.py` is the first-image entry point. It retains the existing `--bundle` input
+and output layout. A completed run writes versioned `stages/*.json` contracts
+for observation, subject mesh, scene, actions, physics and raster rendering.
+Each contract records the implementation, version, parameters, wall-clock
+seconds and SHA-256 hashes of its inputs and outputs. The scene contract also
+declares that the saved DA3 depth is metric and includes camera intrinsics.
+Validate a saved boundary without running any model or solver:
+
+```sh
+python experiments/skeleton/stage_contracts.py check /path/to/run scene
+```
+
+To reuse a validated scene with the same input bundle, run:
+
+```sh
+python experiments/skeleton/run.py /path/to/new-run --bundle /path/to/old-run --resume-scene /path/to/old-run
+```
+
+The command verifies the scene contract and source hashes before copying scene
+artifacts. It then runs the saved-scene physics and raster path. A failed run
+writes `stage_status.json` with the failing stage and reason. The read-only
+`check.py` verifies new contracts when present and keeps legacy runs compatible.
+The current ticket uses saved DA3/SAM/Hunyuan outputs; raw-image inference is
+part of later tickets.
+
+Scene resume rejects any changed scene geometry or obstacle setting recorded in
+the saved scene contract (for example `--cell` or `--radius`). Physics now writes
+`contacts.json` with a versioned per-case contact and penetration record; the
+physics contract hashes it, and the checker compares it with the run record.
+`first_image_stages.py` owns PyBullet world creation, solves, and raster output;
+`first_image_pipeline.py` coordinates these stage calls and writes provenance.

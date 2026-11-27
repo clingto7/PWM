@@ -34,7 +34,7 @@ def hashes(root):
     observation = root.parent/'observation'
     if observation.is_dir():
         files.extend(p for p in observation.rglob('*') if p.is_file())
-    return {str(p.resolve()): hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
+    return {str(p.resolve().relative_to(root.parent.resolve())): hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
 
 
 def raster_source(root):
@@ -91,7 +91,7 @@ class LiveSession:
         if self.output.exists() and any(self.output.iterdir()):
             raise ValueError('output directory is not empty')
         started = time.perf_counter()
-        self.before = hashes(self.root) if self.source is None else {str(self.root/'scene.json'): hashlib.sha256((self.root/'scene.json').read_bytes()).hexdigest()}
+        self.before = hashes(self.root) if self.source is None else {str((self.root/'scene.json').relative_to(self.root.parent)): hashlib.sha256((self.root/'scene.json').read_bytes()).hexdigest()}
         self.output.mkdir(parents=True, exist_ok=True)
         self.source = (self.source or raster_source(self.root)).__enter__()
         self.initialization_s = time.perf_counter()-started
@@ -155,8 +155,10 @@ class LiveSession:
             write_json(self.output/'timings.json', {'initialization_s': self.initialization_s,
                 'steps': self.timings, 'distribution_s': {key: distribution([row[key] for row in self.timings])
                 for key in ('waiting_s','physics_s','raster_s','writing_s','response_latency_s')}})
-            after = {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in self.before}
+            after = {name: hashlib.sha256((self.root.parent/name).read_bytes()).hexdigest() for name in self.before}
             write_json(self.output/'session.json', {'schema': 1, 'scene_and_observation_sha256': self.before,
+                'implementation': {'session': 'live_session.LiveSession',
+                    'solver': 'physics.BulletRasterSession', 'renderer': 'physics.BulletRasterSession.frame_current'},
                 'inputs_unchanged': after == self.before, 'steps_per_control': self.steps_per_control,
                 'physics_hz': 240, 'state_format': 'position_xyz,orientation_xyzw,linear_velocity_xyz,angular_velocity_xyz',
                 'trajectory': 'trajectory.json', 'contacts': 'contacts.json', 'steps': 'steps.jsonl'})

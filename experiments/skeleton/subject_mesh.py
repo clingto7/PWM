@@ -193,11 +193,15 @@ def hunyuan21(image, mask, output, weights):
     rgba = Image.open(output/'masked_subject.png').convert('RGBA')
     load_start = time.perf_counter()
     pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(str(weights))
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
     load_seconds = time.perf_counter()-load_start
     torch.manual_seed(42)
     inference_start = time.perf_counter()
     mesh = pipeline(image=rgba, num_inference_steps=30, guidance_scale=5.0,
                     octree_resolution=256)[0]
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
     inference_seconds = time.perf_counter()-inference_start
     export_start = time.perf_counter()
     mesh.export(output/'car_shape.glb')

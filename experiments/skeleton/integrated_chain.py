@@ -14,7 +14,7 @@ import sys
 import time
 from pathlib import Path
 
-from stage_contracts import check as check_stage, digest
+from stage_contracts import check as check_stage, record as record_stage, digest
 from check import check as check_saved_run
 
 
@@ -27,6 +27,49 @@ def inside(root, name):
     if not path.is_relative_to(root.resolve()) or not path.is_file():
         raise ValueError(f'missing or outside chain artifact: {name}')
     return path
+
+
+LIVE_IMPLEMENTATION = {'session': 'live_session.LiveSession',
+                       'solver': 'physics.BulletRasterSession',
+                       'renderer': 'physics.BulletRasterSession.frame_current'}
+
+
+def live_files(root, directory):
+    return sorted(str(path.relative_to(root)) for path in (root/directory).rglob('*') if path.is_file())
+
+
+def record_live_stage(root, seconds):
+    session = json.loads((root/'live/session.json').read_text())
+    timing = json.loads((root/'live/timings.json').read_text())
+    return record_stage(root, 'live',
+        ['controls.json', *live_files(root, 'scene'), *live_files(root, 'observation')],
+        live_files(root, 'live'), session['implementation'], '1',
+        {'steps_per_control': session['steps_per_control'], 'physics_hz': session['physics_hz']},
+        seconds, timing=timing)
+
+
+def check_live_stage(root, chain):
+    stage = check_stage(root, 'live')
+    session = json.loads((root/'live/session.json').read_text())
+    timing = json.loads((root/'live/timings.json').read_text())
+    expected_inputs = {'controls.json', *live_files(root, 'scene'), *live_files(root, 'observation')}
+    expected_outputs = set(live_files(root, 'live'))
+    if (set(stage['inputs']) != expected_inputs or set(stage['outputs']) != expected_outputs
+            or stage.get('implementation') != LIVE_IMPLEMENTATION
+            or session.get('implementation') != LIVE_IMPLEMENTATION
+            or stage.get('parameters') != {'steps_per_control': session.get('steps_per_control'),
+                                         'physics_hz': session.get('physics_hz')}
+            or stage.get('timing') != timing
+            or not isinstance(stage.get('seconds'), (int, float))
+            or not math.isfinite(stage['seconds']) or stage['seconds'] < 0
+            or abs(stage['seconds'] - chain['timings_s']['live']) > 1e-6):
+        raise ValueError('live stage contract mismatch')
+    upstream = session.get('scene_and_observation_sha256')
+    if (not isinstance(upstream, dict) or 'scene/run.json' not in upstream
+            or not any(name.startswith('observation/') for name in upstream)
+            or any(stage['inputs'].get(name) != value for name, value in upstream.items())):
+        raise ValueError('live session upstream hashes mismatch')
+    return stage
 
 
 def check_live_artifacts(root):
@@ -106,9 +149,10 @@ def check_chain(root):
                 name for name, passed in saved_result['checks'].items() if not passed))
     session = json.loads((live/'session.json').read_text())
     for name, expected in session['scene_and_observation_sha256'].items():
-        path = Path(name)
-        if not path.is_file() or digest(path) != expected:
+        if digest(inside(root, name)) != expected:
             raise ValueError(f'upstream changed since live session: {name}')
+    if chain['schema'] == 2:
+        check_live_stage(root, chain)
     result = check_live_artifacts(live)
     actual_files = {str(path.relative_to(root)) for path in root.rglob('*')
                     if path.is_file() and path != root/'chain.json'}
@@ -125,7 +169,9 @@ def check_chain(root):
 
 def execute(command):
     start = time.perf_counter()
-    subprocess.run(command, check=True)
+    result = subprocess.run(command, stderr=subprocess.PIPE, text=True)
+    if result.returncode:
+        raise RuntimeError(f'{Path(command[1]).name} failed ({result.returncode}): {result.stderr.strip()}')
     return time.perf_counter()-start
 
 
@@ -188,6 +234,7 @@ def replay_downstream(source, output):
         write(output/'controls.json', controls)
         times[stage] = execute([sys.executable, str(script/'live_session.py'),
             str(output/'scene'), str(output/'live'), '--controls', str(output/'controls.json'), '--video'])
+        record_live_stage(output, times[stage])
         stage = 'check'
         write(output/'chain.json', {'schema': 2, 'status': 'complete',
             'implementation': 'integrated_chain.py replay', 'replayed_from': str(source),
@@ -230,6 +277,7 @@ def run(args):
         write(controls, args.controls)
         times[stage] = execute([sys.executable, str(script/'live_session.py'), str(root/'scene'),
                                str(root/'live'), '--controls', str(controls), '--video'])
+        record_live_stage(root, times[stage])
         stage = 'check'
         chain = {'schema': 2, 'status': 'complete', 'implementation': 'integrated_chain.py',
                  'input_sha256': digest(args.image), 'artifact_sha256': ledger(root), 'timings_s':

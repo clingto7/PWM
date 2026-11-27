@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent))
-from integrated_chain import check_live_artifacts, check_chain, ledger, digest, run
+from integrated_chain import check_live_artifacts, check_chain, ledger, digest, run, record_live_stage, LIVE_IMPLEMENTATION
 from types import SimpleNamespace
 
 
@@ -34,6 +34,7 @@ class IntegratedChainTest(unittest.TestCase):
                 segmentation_source=None, mesh=None, da3_weights=None, sam_weights=None,
                 mesh_weights=None, generate_mesh=False, seconds=1, controls=[[0, 0, 0]])
             with patch('integrated_chain.execute', side_effect=execute), \
+                 patch('integrated_chain.record_live_stage'), \
                  patch('integrated_chain.check_chain'):
                 run(args)
             self.assertEqual([Path(command[1]).name for command in commands],
@@ -120,7 +121,10 @@ class IntegratedChainTest(unittest.TestCase):
             (root/'scene/fit_trial.json').write_text(json.dumps({'trusted': True,
                 'initial_support_gap_m': .01, 'max_penetration_m': .01, 'passive_drift_m': .01}))
             (root/'live/session.json').write_text(json.dumps({'inputs_unchanged': True,
-                'scene_and_observation_sha256': {}}))
+                'implementation': LIVE_IMPLEMENTATION, 'steps_per_control': 8,
+                'physics_hz': 240, 'scene_and_observation_sha256': {
+                    'scene/run.json': digest(root/'scene/run.json'),
+                    'observation/inputs/input.jpg': digest(root/'observation/inputs/input.jpg')}}))
             (root/'live/steps.jsonl').write_text(json.dumps({'index': 0, 'state': [1],
                 'contacts': {}, 'frame_paths': {'instance_id': '0000/instance_id.png',
                 'depth': '0000/depth.png'}})+'\n')
@@ -132,11 +136,16 @@ class IntegratedChainTest(unittest.TestCase):
             (root/'live/0000/instance_id.png').write_bytes(b'frame')
             (root/'live/0000/depth.png').write_bytes(b'depth')
             (root/'live/proxy.mp4').write_bytes(b'video')
+            (root/'controls.json').write_text('[[0, 0, 0]]')
+            record_live_stage(root, .5)
             chain = {'schema': 2, 'status': 'complete',
                 'input_sha256': digest(root/'observation/inputs/input.jpg'),
-                'artifact_sha256': ledger(root)}
+                'artifact_sha256': ledger(root), 'timings_s': {'live': .5}}
             (root/'chain.json').write_text(json.dumps(chain))
-            with patch('integrated_chain.check_stage'), patch('integrated_chain.timing_evidence', return_value={}):
+            from stage_contracts import check as real_check_stage
+            with patch('integrated_chain.check_stage', side_effect=lambda path, stage:
+                       real_check_stage(path, stage) if stage == 'live' else {}), \
+                 patch('integrated_chain.timing_evidence', return_value={}):
                 self.assertEqual(check_chain(root)['selected_index'], 1)
                 fit['diagnostics']['after']['rendered_silhouette_iou'] = .1
                 (root/'scene/fit_diagnostics.json').write_text(json.dumps(fit))
@@ -144,3 +153,31 @@ class IntegratedChainTest(unittest.TestCase):
                 (root/'chain.json').write_text(json.dumps(chain))
                 with self.assertRaisesRegex(ValueError, 'fit or passive contact gates'):
                     check_chain(root)
+
+    def test_live_handoff_detects_tamper_even_if_chain_ledger_is_rewritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for directory in ('scene', 'observation', 'live/0000'):
+                (root/directory).mkdir(parents=True)
+            (root/'scene/run.json').write_text('{}')
+            (root/'observation/input.jpg').write_bytes(b'input')
+            (root/'controls.json').write_text('[[1,0,0]]')
+            (root/'live/session.json').write_text(json.dumps({
+                'implementation': LIVE_IMPLEMENTATION, 'steps_per_control': 8,
+                'physics_hz': 240, 'scene_and_observation_sha256': {
+                    'scene/run.json': digest(root/'scene/run.json'),
+                    'observation/input.jpg': digest(root/'observation/input.jpg')}}))
+            (root/'live/timings.json').write_text('{"initialization_s":0.1,"steps":[]}')
+            (root/'live/contacts.json').write_text('[]')
+            (root/'live/0000/depth.png').write_bytes(b'frame')
+            record_live_stage(root, .5)
+            from integrated_chain import check_live_stage
+            chain = {'timings_s': {'live': .5}}
+            self.assertEqual(check_live_stage(root, chain)['implementation'], LIVE_IMPLEMENTATION)
+            (root/'controls.json').write_text('[[2,0,0]]')
+            with self.assertRaisesRegex(ValueError, 'hash mismatch'):
+                check_live_stage(root, chain)
+            (root/'controls.json').write_text('[[1,0,0]]')
+            (root/'live/0000/depth.png').write_bytes(b'altered')
+            with self.assertRaisesRegex(ValueError, 'hash mismatch'):
+                check_live_stage(root, chain)

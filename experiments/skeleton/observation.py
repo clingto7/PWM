@@ -30,11 +30,14 @@ def depth_live(image, destination, weights):
         raise ValueError('DA3 local weights required; no model download is permitted')
     import numpy as np
     from depth_anything_3.api import DepthAnything3
+    import torch
     load_started = time.perf_counter()
     model = DepthAnything3.from_pretrained(str(weights)).to('cuda').eval()
+    torch.cuda.synchronize()
     load_seconds = time.perf_counter()-load_started
     inference_started = time.perf_counter()
     prediction = model.inference([str(image)], infer_gs=False, process_res=504)
+    torch.cuda.synchronize()
     inference_seconds = time.perf_counter()-inference_started
     arrays = {'depth': np.asarray(prediction.depth)}
     for name in ('conf', 'sky', 'intrinsics', 'extrinsics', 'processed_images'):
@@ -64,10 +67,12 @@ def segmentation_live(image_path, destination, weights):
     prompts = torch.from_numpy(points*np.array([1024/width,1024/height], dtype=np.float32)).cuda()[None,:,None]
     load_started = time.perf_counter()
     model = Sam2Model.from_pretrained(weights, local_files_only=True).cuda().eval()
+    torch.cuda.synchronize()
     load_seconds = time.perf_counter()-load_started
     inference_started = time.perf_counter()
     with torch.inference_mode():
         result = model(pixel_values=pixels, input_points=prompts, multimask_output=True)
+    torch.cuda.synchronize()
     inference_seconds = time.perf_counter()-inference_started
     scores_all = result.iou_scores[0].float().cpu().numpy()
     best = scores_all.argmax(axis=1)

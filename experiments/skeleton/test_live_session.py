@@ -53,8 +53,8 @@ class LiveSessionTest(unittest.TestCase):
                 artifacts.return_value.files.return_value = {}
                 (root/'run.json').write_text('{}')
                 snapshot = hashes(root)
-            self.assertIn(str((root/'inputs'/'prediction.npz').resolve()), snapshot)
-            self.assertIn(str((root/'bundle.json').resolve()), snapshot)
+            self.assertIn('run/inputs/prediction.npz', snapshot)
+            self.assertIn('run/bundle.json', snapshot)
 
     def test_sequential_controls_render_solved_state_and_preserve_inputs(self):
         with tempfile.TemporaryDirectory() as tmp:

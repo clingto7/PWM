@@ -12,7 +12,7 @@ from pathlib import Path
 from stage_contracts import digest
 
 UPSTREAM = ('scene.json', 'heightmap.npz', 'obstacles.npz',
-            'fitted_car.obj', 'trajectory.json')
+            'fitted_car.obj', 'car_collision_hull.obj', 'trajectory.json')
 
 
 def write(path, data):

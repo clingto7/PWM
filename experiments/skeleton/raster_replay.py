@@ -28,14 +28,7 @@ def render_saved(root, output, params=None, yaw_deg=0):
                 0,0,2*far*near/(near-far),0]
     with BulletRasterSession(scene,args,width,height,near,far,projection) as frame_source:
         if yaw_deg:
-            import math
-            import numpy as np
-            camera_forward=np.asarray(camera['forward'],dtype=float)
-            camera_up=np.asarray(camera['up'],dtype=float)
-            axis=camera_up/np.linalg.norm(camera_up)
-            angle=math.radians(yaw_deg)
-            direction=camera_forward*math.cos(angle)+np.cross(axis,camera_forward)*math.sin(angle)+axis*np.dot(axis,camera_forward)*(1-math.cos(angle))
-            frame_source.view=frame_source.p.computeViewMatrix([0,0,0],direction.tolist(),camera_up.tolist())
+            frame_source.set_camera_yaw(yaw_deg)
         depth=output/'depth';ids=output/'instance_id';depth.mkdir();ids.mkdir()
         renderer=RasterRenderer(frame_source,width,height,args.radius,params['seconds'])
         _,times=renderer.render(rows,depth,ids)

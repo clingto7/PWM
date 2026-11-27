@@ -13,6 +13,7 @@ from scipy.spatial.transform import Rotation
 import torch
 import trimesh
 from gsplat.rendering import rasterization
+from gaussian_outputs import hash_outputs
 
 
 def disk_quat(normal):
@@ -134,7 +135,7 @@ def render(root, replay=False, output=None, yaw_deg=0):
         Image.fromarray(rendered_ids).save(ids_dir/f'{frame:04d}.png')
         Image.fromarray(millimeters).save(depth_dir/f'{frame:04d}.png')
         Image.fromarray(mixed).save(mix_dir/f'{frame:04d}.png')
-    produced={str(path.relative_to(root)):hashlib.sha256(path.read_bytes()).hexdigest() for directory in (depth_dir,ids_dir,mix_dir) for path in sorted(directory.glob('*.png'))}
+    produced=hash_outputs(root,base,(depth_dir,ids_dir,mix_dir),external=output is not None)
     if output is not None:
         return {'frame_times_s':frame_times,'entity_counts':counts,'depth_method':'gsplat expected optical z depth (ED)','entity_id_method':'chunked one-hot scores; argmax'}
     record['outputs'].update(produced)

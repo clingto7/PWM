@@ -56,7 +56,7 @@ def semantic_check(run_root):
     return {'passed': result.returncode == 0 and report.get('passed') is True,
             'checks': report.get('checks', {}), 'metrics': report.get('metrics', {})}
 
-def run(image, config, output, resume_observation=None, resume_scene=None):
+def run(image, config, output, resume_observation=None, resume_scene=None, resume_perception=None):
     started = time.perf_counter()
     output = output.resolve()
     if output.exists() and any(output.iterdir()):
@@ -91,6 +91,27 @@ def run(image, config, output, resume_observation=None, resume_scene=None):
             if data.get('use_weak_prior'):
                 command.append('--use-weak-prior')
         else:
+            if resume_perception:
+                source = resume_perception.resolve()
+                for name in ('depth', 'segmentation', 'observation'):
+                    check_stage(source, name)
+                if digest(image) != digest(source/'inputs/input.jpg'):
+                    raise ValueError('replay image differs from saved perception')
+                adapters = output/'replay_sources'
+                for kind, filename, original in (('depth', 'prediction.npz', 'inputs/prediction.npz'),
+                                                 ('segmentation', 'sam2_masks.npz', 'sam2_masks.npz')):
+                    folder = adapters/kind
+                    folder.mkdir(parents=True)
+                    shutil.copyfile(source/original, folder/filename)
+                    stage = check_stage(source, kind)
+                    metadata = {'model': stage['implementation'], 'input_sha256': digest(image),
+                                'files': {filename: {'sha256': digest(folder/filename)}}}
+                    if kind == 'depth':
+                        metadata['is_metric'] = json.loads((source/'depth_capability.json').read_text())['scale'] == 'metric_m'
+                    write(folder/'run.json', metadata)
+                data = {**data, 'depth_source': str(adapters/'depth'),
+                        'segmentation_source': str(adapters/'segmentation')}
+                data.pop('saved_mesh', None)
             command = [Path(__file__).with_name('original_image_run.py'), image, output/'automatic',
                        '--seconds', data.get('seconds', 5), '--mesh-provider', data.get('mesh_provider', 'hunyuan3d21')]
             if data.get('use_weak_prior'):
@@ -189,7 +210,7 @@ def main():
     replay = sub.add_parser('replay')
     replay.add_argument('saved', type=Path)
     replay.add_argument('output', type=Path)
-    replay.add_argument('--from-stage', choices=('observation', 'scene', 'physics', 'render'), default='observation')
+    replay.add_argument('--from-stage', choices=('observation', 'mesh', 'scene', 'physics', 'render'), default='observation')
     replay.add_argument('--renderer', choices=('raster', 'gaussian'))
     args = parser.parse_args()
     if args.command == 'check':
@@ -215,8 +236,12 @@ def main():
         invoke([Path(__file__).with_name('render_adapters.py'), source/'automatic/run', args.output,
                 '--renderer', data.get('renderer', 'raster')])
         return
+    # The observation bundle contains the independently validated mesh contract.
+    # Mesh replay revalidates it in original_image_run before scene fitting.
     run(source/'automatic/observation/inputs/input.jpg', data, args.output,
-        source/'automatic/observation', source/'automatic/run' if args.from_stage == 'scene' else None)
+        source/'automatic/observation' if args.from_stage in ('mesh', 'scene') else None,
+        source/'automatic/run' if args.from_stage == 'scene' else None,
+        source/'automatic/observation' if args.from_stage == 'observation' else None)
 
 
 if __name__ == '__main__':

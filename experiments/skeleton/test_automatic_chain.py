@@ -58,12 +58,16 @@ class ReplayRoutingTest(unittest.TestCase):
             (saved/'chain.json').write_text(json.dumps({'config': {'schema': 1, 'renderer': 'raster'}}))
             with patch.object(module, 'check', return_value={'status': 'complete'}), \
                  patch.object(module, 'run') as run, patch.object(module, 'invoke') as invoke:
-                for stage in ('scene', 'physics', 'render'):
+                for stage in ('observation', 'mesh', 'scene', 'physics', 'render'):
                     with patch.object(sys, 'argv', ['automatic_chain.py', 'replay', str(saved),
                                                     str(root/stage), '--from-stage', stage]):
                         module.main()
-                self.assertEqual(run.call_count, 1)
-                self.assertEqual(run.call_args.args[-1], (saved/'automatic/run').resolve())
+                self.assertEqual(run.call_count, 3)
+                self.assertEqual(run.call_args.args[4], (saved/'automatic/run').resolve())
+                self.assertEqual(run.call_args_list[0].args[5], (saved/'automatic/observation').resolve())
+                self.assertIsNone(run.call_args_list[0].args[3])
+                self.assertEqual(run.call_args_list[1].args[3], (saved/'automatic/observation').resolve())
+                self.assertIsNone(run.call_args_list[1].args[4])
                 self.assertEqual(invoke.call_count, 2)
                 for call in invoke.call_args_list:
                     self.assertEqual(call.args[0][1], (saved/'automatic/run').resolve())
@@ -82,3 +86,34 @@ class SemanticGateTest(unittest.TestCase):
             result = module.semantic_check(Path('/saved/run'))
         self.assertFalse(result['passed'])
         self.assertFalse(result['checks']['energy'])
+
+class ObservationReplayTest(unittest.TestCase):
+    def test_observation_replay_reuses_perception_and_regenerates_mesh(self):
+        from unittest.mock import patch
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('automatic_chain', CLI)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root/'saved'
+            (source/'inputs').mkdir(parents=True)
+            (source/'inputs/input.jpg').write_bytes(b'image')
+            (source/'inputs/prediction.npz').write_bytes(b'depth')
+            (source/'sam2_masks.npz').write_bytes(b'masks')
+            (source/'depth_capability.json').write_text(json.dumps({'scale': 'metric_m'}))
+            image = source/'inputs/input.jpg'
+            config = {'schema': 1, 'renderer': 'raster', 'saved_mesh': '/old/mesh.glb'}
+            with patch.object(module, 'check_stage', return_value={'implementation': 'saved model'}), \
+                 patch.object(module, 'invoke', side_effect=RuntimeError('stop after routing')) as invoke:
+                with self.assertRaisesRegex(RuntimeError, 'stop after routing'):
+                    module.run(image, config, root/'new', resume_perception=source)
+            command = list(map(str, invoke.call_args.args[0]))
+            self.assertIn('--depth-source', command)
+            self.assertIn('--segmentation-source', command)
+            self.assertNotIn('--saved-mesh', command)
+            depth_meta = json.loads((root/'new/replay_sources/depth/run.json').read_text())
+            self.assertEqual(depth_meta['is_metric'], True)
+            import hashlib
+            self.assertEqual(depth_meta['files']['prediction.npz']['sha256'], hashlib.sha256(b'depth').hexdigest())
+            self.assertEqual(json.loads((root/'new/chain.json').read_text())['failure']['stage'], 'observation')

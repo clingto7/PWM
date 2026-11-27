@@ -158,8 +158,19 @@ def build(args):
             'selection_sha256': digest(args.bundle/'selection.json')}
     record_stage(out, 'observation', input_files[:3], input_files[:3],
                  observation_implementation, '1', observation_parameters, observation_time)
+    mesh_implementation = 'saved Hunyuan3D 2.1'
+    mesh_parameters = {}
+    mesh_seconds = 0.0
+    if args.bundle and (args.bundle/'mesh/subject_mesh.json').is_file():
+        from subject_mesh import verify as verify_mesh
+        verify_mesh(args.bundle/'mesh')
+        source_mesh = json.loads((args.bundle/'mesh/subject_mesh.json').read_text())
+        mesh_implementation = source_mesh['implementation']
+        mesh_parameters = {key: source_mesh[key] for key in
+                           ('provider', 'units', 'orientation', 'coordinate_frame', 'validity', 'input_hashes')}
+        mesh_seconds = source_mesh['timing_s']['total']
     record_stage(out, 'subject_mesh', [bundled['hunyuan_mesh']], [bundled['hunyuan_mesh']],
-                 'saved Hunyuan3D 2.1', '1', {}, 0.0)
+                 mesh_implementation, '1', mesh_parameters, mesh_seconds)
     record_stage(out, 'scene', input_files, SceneArtifacts.NAMES,
                  'first_image.reconstruct', '1', record['stages']['ground_fit_scene']['parameters'],
                  ground_time + scene_time)
@@ -188,7 +199,7 @@ def build(args):
     print(json.dumps({'run_dir':str(out),'frames':int(args.seconds*30),'measurements':record['measurements']},indent=2))
 
 
-def main():
+def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output',type=Path)
     parser.add_argument('--bundle',type=Path,help='run bundle containing bundle.json and inputs/')
@@ -209,7 +220,7 @@ def main():
     parser.add_argument('--obstacles-render-only',action='store_true')
     parser.add_argument('--seconds',type=float,default=5)
     parser.add_argument('--render-gaussians',action='store_true',help='also render geometric gsplat frames (requires CUDA)')
-    args=parser.parse_args()
+    args=parser.parse_args(argv)
     values=(args.radius,args.angle,args.cell,args.near_depth,args.ground_inlier,args.obstacle_height,args.friction,args.density,args.speed,args.obstacle_min_speed,args.ballistic_up_speed,args.seconds)
     if not (all(math.isfinite(value) for value in values) and 0 < args.radius <= 100 and 0 < args.angle < 180 and 0 < args.cell <= args.radius/2 and 0 < args.near_depth <= args.radius and 0 < args.ground_inlier <= 2 and 0 < args.obstacle_height <= 10 and 1 <= args.obstacle_min_pixels <= 1000 and 1 <= args.obstacle_min_cells <= 1000 and 0 <= args.friction <= 2 and 0 < args.density <= 10000 and 0 < args.speed <= 100 and 0 < args.obstacle_min_speed <= 15 and 0 < args.seconds <= 60 and int(args.seconds*240) >= 1 and int(args.seconds*30) >= 1):
         parser.error('invalid parameter range: require positive radius/cell/density/speed/duration/inlier; angle (0,180), near-depth <= radius, friction [0,2], and at least one physics and video frame')
@@ -225,6 +236,10 @@ def main():
             write_json(out/'stage_status.json', {'stage':status['stage'], 'status':'failed',
                 'error_type':type(exc).__name__, 'reason':str(exc)})
         raise
+
+
+def main_with_arguments(output, bundle, seconds):
+    main([str(output), '--bundle', str(bundle), '--seconds', str(seconds)])
 
 
 if __name__ == '__main__':

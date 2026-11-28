@@ -126,7 +126,11 @@ class PyBulletSolver:
             dx,dy = v[0]-u[0],v[1]-u[1]
             mid = [(u[0]+v[0])/2,(u[1]+v[1])/2,flat_z+.5]
             shape = p.createCollisionShape(p.GEOM_BOX,halfExtents=[math.hypot(dx,dy)/2,.04,.5])
-            walls.append(p.createMultiBody(0,shape,basePosition=mid,baseOrientation=p.getQuaternionFromEuler([0,0,math.atan2(dy,dx)])))
+            wall = p.createMultiBody(0,shape,basePosition=mid,baseOrientation=p.getQuaternionFromEuler([0,0,math.atan2(dy,dx)]))
+            # PyBullet still creates a visual box for collision-only bodies.
+            # Keep the boundary collider, but remove it from Tiny Renderer.
+            p.changeVisualShape(wall,-1,rgbaColor=[0,0,0,0])
+            walls.append(wall)
         shape = p.createCollisionShape(p.GEOM_MESH, vertices=hull.vertices.tolist())
         visual = p.createVisualShape(p.GEOM_MESH, fileName=str(out/'fitted_car.obj'), rgbaColor=[1,0,0,1])
         body = p.createMultiBody(mass,shape,visual,basePosition=car_pos,baseOrientation=car_orientation)
@@ -307,6 +311,9 @@ class BulletRasterSession:
         for handle,instance_id in self.obstacles.items():
             ids[(raw & 0xffffff)==handle]=instance_id
         ids[raw<0]=0
+        unmapped = (raw >= 0) & (ids == 0)
+        if np.any(unmapped):
+            raise ValueError(f'unmapped visual body in raster frame: {int(np.count_nonzero(unmapped))} pixels')
         zbuf=np.asarray(zbuf).reshape(self.height,self.width)
         metric=self.far*self.near/(self.far-(self.far-self.near)*zbuf)
         return metric,ids

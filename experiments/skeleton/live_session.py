@@ -71,7 +71,7 @@ def save_raster(frame, destination):
     Image.fromarray(depth).save(destination/'depth.png')
     Image.fromarray(ids).save(destination/'instance_id.png')
     colors = np.empty((*ids.shape, 3), dtype=np.uint8)
-    colors[ids == 0] = (42, 62, 91)       # background
+    colors[ids == 0] = (0, 0, 0)           # no reconstructed geometry
     colors[ids == 1] = (145, 151, 142)    # support surface
     colors[ids == 2] = (244, 153, 55)     # controlled body
     static = ids >= 3

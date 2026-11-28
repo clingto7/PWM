@@ -8,6 +8,7 @@ from unittest.mock import patch
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
 from live_session import LiveSession, hashes, save_raster, encode_proxy_video
+from physics import BulletRasterSession
 import numpy as np
 from PIL import Image
 import subprocess
@@ -54,12 +55,16 @@ class LiveSessionTest(unittest.TestCase):
             ids[:, :8] = 1
             ids[:, 8:24] = 2
             ids[:, 24:] = 4
+            ids[0, :] = 0
             frame = (np.full(ids.shape, 2.0, dtype=np.float32), ids)
             paths = save_raster(frame, root/'0000')
             self.assertEqual(set(paths), {'depth', 'instance_id', 'proxy_rgb'})
             np.testing.assert_array_equal(np.asarray(Image.open(root/paths['instance_id'])), ids)
             rgb = np.asarray(Image.open(root/paths['proxy_rgb']))
             self.assertEqual(rgb.shape, (32, 32, 3))
+            np.testing.assert_array_equal(rgb[16, 30], [58, 166, 105])
+            np.testing.assert_array_equal(rgb[0, 30], [0, 0, 0])
+            np.testing.assert_array_equal(rgb[16, 2], [145, 151, 142])
             self.assertGreater(int(rgb[16, 16].max()), 100)
             self.assertFalse(np.array_equal(rgb[16, 2], rgb[16, 16]))
             self.assertFalse(np.array_equal(rgb[16, 16], rgb[16, 28]))
@@ -70,6 +75,23 @@ class LiveSessionTest(unittest.TestCase):
             pixels = np.frombuffer(decoded, dtype=np.uint8).reshape(32, 32, 3)
             self.assertGreater(int(pixels[16, 16].max()), 80)
             self.assertFalse(np.array_equal(pixels[16, 2], pixels[16, 16]))
+
+    def test_live_raster_rejects_visible_unmapped_collision_body(self):
+        class Camera:
+            ER_TINY_RENDERER = 0
+            ER_SEGMENTATION_MASK_OBJECT_AND_LINKINDEX = 0
+
+            def getCameraImage(self, *args, **kwargs):
+                return 2, 2, None, np.full(4, .5), np.array([1, 9, -1, 0])
+
+        source = BulletRasterSession(None, None, 2, 2, .1, 100, [])
+        source.p = Camera()
+        source.view = []
+        source.ground = 0
+        source.body = 1
+        source.obstacles = {}
+        with self.assertRaisesRegex(ValueError, 'unmapped visual body'):
+            source.frame_current()
 
     def test_snapshot_includes_bundle_and_saved_observation_inputs(self):
         with tempfile.TemporaryDirectory() as tmp:

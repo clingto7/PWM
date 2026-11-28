@@ -238,11 +238,43 @@ python experiments/skeleton/automatic_chain.py replay RUN_DIR NEW_DIR --from-sta
 python experiments/skeleton/automatic_chain.py replay RUN_DIR RENDER_DIR --from-stage render --renderer raster
 ```
 
-Config schema 1 accepts `renderer` (`raster` or `gaussian`), `seconds`,
+Config schema 1 accepts `renderer` (`raster`, `gpu_raster` or `gaussian`), `seconds`,
 `mesh_provider` (`hunyuan3d21`) and optional saved model
 sources or local weight paths (`depth_source`, `segmentation_source`,
 `saved_mesh`, `da3_weights`, `sam_weights`, `mesh_weights`). Without saved
 sources, installed local weights are required. No download is attempted.
+
+`gpu_raster` uses nvdiffrast CUDA triangle rasterization on the saved scene;
+it writes the same instance-ID, metric-depth PNG and proxy-video contract as
+`raster`. It requires CUDA, PyTorch and nvdiffrast. Install the optional
+renderer into a task environment with UV, using the pinned nvdiffrast source
+revision tested on RTX 4090:
+
+```sh
+uv pip install --python PATH_TO_VENV_PYTHON setuptools wheel ninja
+uv pip install --python PATH_TO_VENV_PYTHON --no-deps --no-build-isolation \
+  'nvdiffrast @ git+https://github.com/NVlabs/nvdiffrast.git@253ac4fcea7de5f396371124af597e6cc957bfae'
+python experiments/skeleton/render_adapters.py SAVED_RUN GPU_OUTPUT --renderer gpu_raster
+```
+
+For `gaussian`, set a persistent cache directory within the authorized
+workspace. The first call compiles gsplat's CUDA extension; later processes
+reuse the compiled extension when the build environment matches. A warmup
+can move that first compile before rendering:
+
+```sh
+python experiments/skeleton/gsplat_cache.py --cache-dir WORKSPACE/cache/torch_extensions
+python experiments/skeleton/render_adapters.py SAVED_RUN GAUSSIAN_OUTPUT \
+  --renderer gaussian --gsplat-cache-dir WORKSPACE/cache/torch_extensions
+```
+
+The automatic chain also accepts `gpu_raster` in `renderer` and an optional
+`gsplat_cache_dir` config path for Gaussian runs. `compare` and `replay`
+accept `--gsplat-cache-dir`. Without an explicit path, PyTorch uses its
+standard extension cache or an existing `TORCH_EXTENSIONS_DIR` setting.
+The current image-to-scene build still runs its CPU raster acceptance and
+replay stages before the selected proxy adapter. Selecting `gpu_raster`
+accelerates the adapter render; it does not yet remove those earlier stages.
 
 Scenes created with the image/depth/support fit record `fit_evidence=image_depth_support`
 in their stage parameters. Scene resume requires those parameters to match;

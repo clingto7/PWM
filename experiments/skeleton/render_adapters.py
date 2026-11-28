@@ -1,6 +1,6 @@
 """Replay one proxy renderer against an immutable saved scene and trajectory.
 
-Usage: render_adapters.py RUN_DIR OUTPUT_DIR --renderer raster|gaussian
+Usage: render_adapters.py RUN_DIR OUTPUT_DIR --renderer raster|gpu_raster|gaussian
 """
 import argparse
 import json
@@ -19,7 +19,7 @@ def write(path, data):
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + '\n')
 
 
-def render(root, out, renderer, nearby_deg):
+def render(root, out, renderer, nearby_deg, gsplat_cache_dir=None):
     root, out = root.resolve(), out.resolve()
     if out == root or root in out.parents or out in root.parents:
         raise ValueError('render output must be separate from saved run')
@@ -59,7 +59,12 @@ def render(root, out, renderer, nearby_deg):
                 from raster_replay import render_saved
                 frame_times = render_saved(root, view_out, parameters, yaw)
                 details = {'frame_times_s': frame_times}
+            elif renderer == 'gpu_raster':
+                from gpu_raster import render_saved
+                details = render_saved(root, view_out, parameters, yaw)
             else:
+                from gsplat_cache import configure
+                result['gsplat_cache_dir'] = configure(gsplat_cache_dir)
                 from gaussian import render as render_gaussian
                 details = render_gaussian(root, output=view_out, yaw_deg=yaw)
             from PIL import Image
@@ -99,12 +104,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('run_dir', type=Path)
     parser.add_argument('output_dir', type=Path)
-    parser.add_argument('--renderer', choices=('raster', 'gaussian'), required=True)
+    parser.add_argument('--renderer', choices=('raster', 'gpu_raster', 'gaussian'), required=True)
     parser.add_argument('--nearby-yaw-deg', type=float, default=5)
+    parser.add_argument('--gsplat-cache-dir', type=Path,
+                        help='persistent CUDA extension cache for gaussian renderer')
     args = parser.parse_args()
     if not math.isfinite(args.nearby_yaw_deg) or abs(args.nearby_yaw_deg) > 10:
         parser.error('nearby yaw must be within 10 degrees')
-    render(args.run_dir, args.output_dir, args.renderer, args.nearby_yaw_deg)
+    if args.gsplat_cache_dir and args.renderer != 'gaussian':
+        parser.error('--gsplat-cache-dir only applies to gaussian')
+    render(args.run_dir, args.output_dir, args.renderer, args.nearby_yaw_deg,
+           args.gsplat_cache_dir)
 
 
 if __name__ == '__main__':

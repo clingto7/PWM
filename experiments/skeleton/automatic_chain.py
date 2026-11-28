@@ -15,6 +15,7 @@ from stage_contracts import digest, check as check_stage
 
 STAGES = ('observation', 'mesh', 'scene_physics', 'proxy_render')
 SOURCE_KEYS = ('depth_source', 'segmentation_source', 'saved_mesh', 'da3_weights', 'sam_weights', 'mesh_weights')
+RENDERERS = ('raster', 'gpu_raster', 'gaussian')
 
 
 def write(path, value):
@@ -23,11 +24,13 @@ def write(path, value):
 
 def config_read(path):
     data = json.loads(path.read_text())
-    allowed = {'schema', 'renderer', 'seconds', 'mesh_provider', *SOURCE_KEYS}
+    allowed = {'schema', 'renderer', 'seconds', 'mesh_provider', 'gsplat_cache_dir', *SOURCE_KEYS}
     if not isinstance(data, dict) or set(data) - allowed or data.get('schema') != 1:
         raise ValueError('unsupported configuration schema or keys')
-    if data.get('renderer', 'raster') not in ('raster', 'gaussian'):
-        raise ValueError('renderer must be raster or gaussian')
+    if data.get('renderer', 'raster') not in RENDERERS:
+        raise ValueError('renderer must be raster, gpu_raster or gaussian')
+    if 'gsplat_cache_dir' in data and not isinstance(data['gsplat_cache_dir'], str):
+        raise ValueError('gsplat_cache_dir must be a path string')
     seconds = data.get('seconds', 5)
     if not isinstance(seconds, (int, float)) or not 0 < seconds <= 60:
         raise ValueError('seconds must be in (0, 60]')
@@ -41,6 +44,14 @@ def config_read(path):
 
 def invoke(command):
     subprocess.run([sys.executable, *map(str, command)], check=True)
+
+
+def renderer_command(source, output, renderer, cache_dir=None):
+    command = [Path(__file__).with_name('render_adapters.py'), source, output,
+               '--renderer', renderer]
+    if renderer == 'gaussian' and cache_dir:
+        command.extend(['--gsplat-cache-dir', cache_dir])
+    return command
 
 
 
@@ -129,8 +140,8 @@ def run(image, config, output, resume_observation=None, resume_scene=None, resum
                                                   'parameters': checked['parameters']}
         manifest['stage'] = 'proxy_render'
         tick = time.perf_counter()
-        invoke([Path(__file__).with_name('render_adapters.py'), run_root, output/'proxy',
-                '--renderer', data.get('renderer', 'raster')])
+        invoke(renderer_command(run_root, output/'proxy', data.get('renderer', 'raster'),
+                                data.get('gsplat_cache_dir')))
         manifest['timings_s']['proxy_render'] = time.perf_counter() - tick
         render = json.loads((output/'proxy/render.json').read_text())
         manifest['implementations']['proxy_render'] = {'name': data.get('renderer', 'raster'),
@@ -192,7 +203,7 @@ def check(root):
 
 
 
-def compare(saved, output, alternate):
+def compare(saved, output, alternate, cache_dir=None):
     saved, output = saved.resolve(), output.resolve()
     if output == saved or output in saved.parents or saved in output.parents:
         raise ValueError('comparison output must be separate from saved chain')
@@ -212,8 +223,7 @@ def compare(saved, output, alternate):
             raise ValueError('alternate renderer must differ from completed baseline')
         if baseline.get('inputs') != baseline.get('inputs_after'):
             raise ValueError('baseline upstream changed during rendering')
-        invoke([Path(__file__).with_name('render_adapters.py'), saved/'automatic/run',
-                output/'alternate', '--renderer', alternate])
+        invoke(renderer_command(saved/'automatic/run', output/'alternate', alternate, cache_dir))
         alternate_path = output/'alternate/render.json'
         other = json.loads(alternate_path.read_text())
         if other.get('status') != 'complete' or other.get('renderer') != alternate:
@@ -249,12 +259,14 @@ def main():
     paired = sub.add_parser('compare')
     paired.add_argument('saved', type=Path)
     paired.add_argument('output', type=Path)
-    paired.add_argument('--alternate-renderer', choices=('raster', 'gaussian'), required=True)
+    paired.add_argument('--alternate-renderer', choices=RENDERERS, required=True)
+    paired.add_argument('--gsplat-cache-dir', type=Path)
     replay = sub.add_parser('replay')
     replay.add_argument('saved', type=Path)
     replay.add_argument('output', type=Path)
     replay.add_argument('--from-stage', choices=('observation', 'mesh', 'scene', 'physics', 'render'), default='observation')
-    replay.add_argument('--renderer', choices=('raster', 'gaussian'))
+    replay.add_argument('--renderer', choices=RENDERERS)
+    replay.add_argument('--gsplat-cache-dir', type=Path)
     args = parser.parse_args()
     if args.command == 'check':
         result = check(args.output.resolve())
@@ -264,7 +276,7 @@ def main():
         run(args.image, args.config, args.output, args.resume_observation)
         return
     if args.command == 'compare':
-        result = compare(args.saved, args.output, args.alternate_renderer)
+        result = compare(args.saved, args.output, args.alternate_renderer, args.gsplat_cache_dir)
         print(json.dumps(result, sort_keys=True))
         return
     source = args.saved.resolve()
@@ -275,13 +287,13 @@ def main():
     if args.renderer:
         data['renderer'] = args.renderer
     if args.from_stage == 'render':
-        invoke([Path(__file__).with_name('render_adapters.py'), source/'automatic/run', args.output,
-                '--renderer', data.get('renderer', 'raster')])
+        invoke(renderer_command(source/'automatic/run', args.output,
+                                data.get('renderer', 'raster'), args.gsplat_cache_dir or data.get('gsplat_cache_dir')))
         return
     if args.from_stage == 'physics':
         # Physics outputs are immutable upstream inputs for either proxy renderer.
-        invoke([Path(__file__).with_name('render_adapters.py'), source/'automatic/run', args.output,
-                '--renderer', data.get('renderer', 'raster')])
+        invoke(renderer_command(source/'automatic/run', args.output,
+                                data.get('renderer', 'raster'), args.gsplat_cache_dir or data.get('gsplat_cache_dir')))
         return
     # The observation bundle contains the independently validated mesh contract.
     # Mesh replay revalidates it in original_image_run before scene fitting.

@@ -9,11 +9,25 @@ from unittest.mock import patch
 import importlib.util
 import types
 import hashlib
+import os
 
 CLI = Path(__file__).with_name('render_adapters.py')
 
 
 class RendererBoundaryTest(unittest.TestCase):
+    def test_gsplat_cache_is_explicit_and_reusable(self):
+        spec = importlib.util.spec_from_file_location('gsplat_cache', CLI.with_name('gsplat_cache.py'))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('TORCH_EXTENSIONS_DIR', None)
+            cache = Path(tmp)/'torch_extensions'
+            self.assertEqual(module.configure(cache), str(cache.resolve()))
+            self.assertEqual(module.configure(cache), str(cache.resolve()))
+            self.assertTrue(cache.is_dir())
+            with self.assertRaisesRegex(ValueError, 'conflicts'):
+                module.configure(Path(tmp)/'other')
+
     def test_gaussian_external_output_hashes_are_relative_to_output(self):
         spec = importlib.util.spec_from_file_location('gaussian_outputs', CLI.with_name('gaussian_outputs.py'))
         module = importlib.util.module_from_spec(spec)

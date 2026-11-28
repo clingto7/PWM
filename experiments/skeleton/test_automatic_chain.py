@@ -13,6 +13,18 @@ class AutomaticChainTest(unittest.TestCase):
     def invoke(self, *args):
         return subprocess.run([sys.executable, str(CLI), *map(str, args)], capture_output=True, text=True)
 
+    def test_gpu_renderer_and_gaussian_cache_config(self):
+        from automatic_chain import config_read, renderer_command
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp)/'config.json'
+            config.write_text(json.dumps({'schema': 1, 'renderer': 'gpu_raster', 'seconds': 1}))
+            self.assertEqual(config_read(config)['renderer'], 'gpu_raster')
+            config.write_text(json.dumps({'schema': 1, 'renderer': 'gaussian',
+                                          'seconds': 1, 'gsplat_cache_dir': str(Path(tmp)/'cache')}))
+            self.assertEqual(config_read(config)['gsplat_cache_dir'], str(Path(tmp)/'cache'))
+            command = renderer_command(Path(tmp)/'run', Path(tmp)/'out', 'gaussian', Path(tmp)/'cache')
+            self.assertEqual(command[-2:], ['--gsplat-cache-dir', Path(tmp)/'cache'])
+
     def test_category_prior_option_is_rejected_at_config_seam(self):
         from automatic_chain import config_read
         with tempfile.TemporaryDirectory() as tmp:

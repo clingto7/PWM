@@ -35,23 +35,35 @@ class PyBulletSolver:
 
     def solve(self, body, obstacle_bodies, velocity, seconds):
         p=self.p
+        timings = {'stepping': 0.0, 'state_reads': 0.0, 'contact_queries': 0.0}
+        solve_started = time.perf_counter()
+        started = time.perf_counter()
         pos,quat=p.getBasePositionAndOrientation(body)
         vel,omega=p.getBaseVelocity(body)
+        timings['state_reads'] += time.perf_counter() - started
         rows=[[*pos,*quat,*vel,*omega]]
         penetration=0.0
         obstacle_contacts={}
         p.resetBaseVelocity(body,linearVelocity=velocity)
         for _ in range(int(seconds*self.hz)-1):
+            started = time.perf_counter()
             p.stepSimulation()
+            timings['stepping'] += time.perf_counter() - started
+            started = time.perf_counter()
             pos,quat=p.getBasePositionAndOrientation(body)
             vel,omega=p.getBaseVelocity(body)
             rows.append([*pos,*quat,*vel,*omega])
+            timings['state_reads'] += time.perf_counter() - started
+            started = time.perf_counter()
             contacts=p.getContactPoints(bodyA=body)
             penetration=max(penetration,max([0]+[-float(q[8]) for q in contacts]))
             for q in contacts:
                 if q[2] in obstacle_bodies:
                     instance_id=obstacle_bodies[q[2]]
                     obstacle_contacts[instance_id]=obstacle_contacts.get(instance_id,0)+1
+            timings['contact_queries'] += time.perf_counter() - started
+        self._last_solve_timings = timings
+        self._last_solve_elapsed = time.perf_counter() - solve_started
         return rows,penetration,obstacle_contacts
 
     def trial_without_impulse(self, body, support, steps=120):
@@ -103,6 +115,7 @@ class PyBulletSolver:
                 p.changeDynamics(obstacle_body,-1,lateralFriction=args.friction,restitution=0)
             obstacle_bodies[obstacle_body]=component['instance_id']
         walls = []
+        wall_started = time.perf_counter()
         # Every exposed traversable-cell edge is an invisible collision wall.
         segments = []
         mask=geometry.traversable
@@ -131,6 +144,7 @@ class PyBulletSolver:
             # Keep the boundary collider, but remove it from Tiny Renderer.
             p.changeVisualShape(wall,-1,rgbaColor=[0,0,0,0])
             walls.append(wall)
+        self._last_wall_build_seconds = time.perf_counter() - wall_started
         shape = p.createCollisionShape(p.GEOM_MESH, vertices=hull.vertices.tolist())
         visual = p.createVisualShape(p.GEOM_MESH, fileName=str(out/'fitted_car.obj'), rgbaColor=[1,0,0,1])
         body = p.createMultiBody(mass,shape,visual,basePosition=car_pos,baseOrientation=car_orientation)
@@ -148,13 +162,21 @@ def solve_saved_scene(out, args, scene, component_ids, tops, actions=None):
     width, length, _ = scene['car']['size_m']
     origin_x = -(component_ids.shape[0]-1)/2*args.cell
     sim_start = time.perf_counter()
+    timings = {key: 0.0 for key in ('initial_world_build', 'fit_trial', 'case_world_build', 'case_stepping', 'state_reads', 'contact_queries', 'replay_stepping', 'replay_state_reads', 'replay_contact_queries', 'trajectory_writes', 'remaining_overhead')}
+    wall_build_seconds = 0.0
+    world_build_count = 0
     import pybullet as p
     client = p.connect(p.DIRECT)
     try:
         solver=PyBulletSolver(p)
+        phase_started = time.perf_counter()
         ground, body, obstacle_bodies = solver.create_world(geometry,args,out)
+        timings['initial_world_build'] += time.perf_counter() - phase_started
+        wall_build_seconds += solver._last_wall_build_seconds
+        world_build_count += 1
         trial_started = time.perf_counter()
         trial = solver.trial_without_impulse(body, ground)
+        timings['fit_trial'] += time.perf_counter() - trial_started
         trial['seconds'] = time.perf_counter()-trial_started
         write_json(out/'fit_trial.json', trial)
         from PIL import Image, ImageDraw
@@ -170,7 +192,11 @@ def solve_saved_scene(out, args, scene, component_ids, tops, actions=None):
         if not trial['trusted']:
             raise ValueError('untrusted initial subject fit: see fit_trial.json')
         p.disconnect(client); client=p.connect(p.DIRECT)
+        phase_started = time.perf_counter()
         ground, body, obstacle_bodies = solver.create_world(geometry,args,out)
+        timings['initial_world_build'] += time.perf_counter() - phase_started
+        wall_build_seconds += solver._last_wall_build_seconds
+        world_build_count += 1
         inertia_diagonal=list(p.getDynamicsInfo(body,-1)[2])
         effective_mass=float(p.getDynamicsInfo(body,-1)[0])
         if not math.isclose(effective_mass, mass, rel_tol=1e-9):
@@ -219,19 +245,46 @@ def solve_saved_scene(out, args, scene, component_ids, tops, actions=None):
         for name,velocity in impulses.items():
             if name!='coast':
                 p.disconnect(client);client=p.connect(p.DIRECT)
+                phase_started = time.perf_counter()
                 ground,body,obstacle_bodies=solver.create_world(geometry,args,out)
+                timings['case_world_build'] += time.perf_counter() - phase_started
+                wall_build_seconds += solver._last_wall_build_seconds
+                world_build_count += 1
             case_rows,penetrations[name],hits[name]=solver.solve(body,obstacle_bodies,velocity,args.seconds)
+            solve_timing = solver._last_solve_timings
+            timings['case_stepping'] += solve_timing['stepping']
+            timings['state_reads'] += solve_timing['state_reads']
+            timings['contact_queries'] += solve_timing['contact_queries']
             p.disconnect(client);client=p.connect(p.DIRECT)
+            phase_started = time.perf_counter()
             ground,body,obstacle_bodies=solver.create_world(geometry,args,out)
+            timings['case_world_build'] += time.perf_counter() - phase_started
+            wall_build_seconds += solver._last_wall_build_seconds
+            world_build_count += 1
             replay,_,_=solver.solve(body,obstacle_bodies,velocity,args.seconds)
+            solve_timing = solver._last_solve_timings
+            timings['replay_stepping'] += solve_timing['stepping']
+            timings['replay_state_reads'] += solve_timing['state_reads']
+            timings['replay_contact_queries'] += solve_timing['contact_queries']
             trajectories[name]=case_rows;replays[name]=replay
             prefix='' if name=='coast' else name+'/'
             if name!='coast': (out/name).mkdir(exist_ok=True)
+            phase_started = time.perf_counter()
             write_json(out/(prefix+'trajectory.json'),case_rows)
             write_json(out/(prefix+'replay_trajectory.json'),replay)
+            timings['trajectory_writes'] += time.perf_counter() - phase_started
         if any(len(rows) != int(args.seconds * solver.hz) for rows in trajectories.values()):
             raise RuntimeError('physics trajectory has unexpected frame count')
         write_json(out/'impulses.json',specifications)
+        profiled_total = time.perf_counter()-sim_start
+        timings['remaining_overhead'] = profiled_total-sum(timings.values())
+        write_json(out/'physics_profile.json', {'schema':1,
+            'timings_s':timings,
+            'total_profiled_s':profiled_total,
+            'subtotals_s':{'wall_creation_within_world_build':wall_build_seconds},
+            'counts':{'world_builds':world_build_count,
+                      'case_rollouts':len(impulses),'replay_rollouts':len(impulses),
+                      'recorded_states_per_rollout':int(args.seconds*solver.hz)}})
         sim_time=time.perf_counter()-sim_start
         write_json(out/'contacts.json', {'schema': 1, 'cases': {
             name: {'max_contact_penetration_m': penetrations[name],
@@ -247,7 +300,7 @@ def solve_saved_scene(out, args, scene, component_ids, tops, actions=None):
         return {'inertia_diagonal': inertia_diagonal, 'trajectories': trajectories,
                 'penetrations': penetrations, 'replays': replays, 'hits': hits,
                 'specifications': specifications, 'impulses': impulses,
-                'sim_time': time.perf_counter()-sim_start}
+                'sim_time': time.perf_counter()-sim_start, 'profiling': timings}
     except Exception as exc:
         write_json(out/'physics_failure.json', {'stage':'physics','reason':str(exc),'type':type(exc).__name__})
         raise

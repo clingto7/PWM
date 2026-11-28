@@ -164,7 +164,7 @@ def build(args):
     record['impulse_cases']={name:{'trajectory':('' if name=='coast' else name+'/')+'trajectory.json','replay':('' if name=='coast' else name+'/')+'replay_trajectory.json','impulse':specifications[name],'inertia_diagonal_kg_m2':inertia_diagonal,'max_contact_penetration_m':penetrations[name],'obstacle_contact_samples_by_id':hits[name]} for name in impulses}
     record['parameters']['ballistic_up_speed_m_s']=args.ballistic_up_speed
     record['measurements']['ballistic_in_camera']=ballistic_visible
-    record['stages']['simulation_replay']['outputs'].update({name:outputs[name] for name in outputs if name.startswith(('ballistic/','obstacle/')) or name in ('impulses.json','contacts.json')})
+    record['stages']['simulation_replay']['outputs'].update({name:outputs[name] for name in outputs if name.startswith(('ballistic/','obstacle/')) or name in ('impulses.json','contacts.json','physics_profile.json')})
     record['scene_artifacts']=list(SceneArtifacts.NAMES)
     implementation = 'CudaRasterRenderer' if args.main_renderer == 'gpu_raster' else 'RasterRenderer'
     record['adapters']={'physics':'PyBulletSolver','main_renderer':implementation,
@@ -220,7 +220,7 @@ def build(args):
     trajectory_files = ['trajectory.json', 'replay_trajectory.json',
                         'ballistic/trajectory.json', 'ballistic/replay_trajectory.json',
                         'obstacle/trajectory.json', 'obstacle/replay_trajectory.json',
-                        'contacts.json']
+                        'contacts.json', 'physics_profile.json']
     record_stage(out, 'physics', [*SceneArtifacts.NAMES, 'impulses.json'],
                  [*trajectory_files, 'fit_trial.json', 'fit_trial.png', 'physics_session.json'],
                  'PyBulletSolver', str(api_version()),

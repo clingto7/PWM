@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent))
-from integrated_chain import check_live_artifacts, check_chain, ledger, digest, run, record_live_stage
+from integrated_chain import check_live_artifacts, check_chain, ledger, digest, run, record_live_stage, check_live_stage
 from types import SimpleNamespace
 
 
@@ -103,6 +103,16 @@ class IntegratedChainTest(unittest.TestCase):
             (root/'session.json').write_text(json.dumps({'inputs_unchanged': True,
                 'scene_and_observation_sha256': {}}))
             self.assertEqual(check_live_artifacts(root)['steps'], 1)
+            with self.assertRaisesRegex(ValueError, 'proxy'):
+                check_live_artifacts(root, require_proxy=True)
+            (root/'0000/proxy_rgb.png').write_bytes(b'visible RGB frame')
+            step = json.loads((root/'steps.jsonl').read_text())
+            step['frame_paths']['proxy_rgb'] = '0000/proxy_rgb.png'
+            (root/'steps.jsonl').write_text(json.dumps(step)+'\n')
+            self.assertEqual(check_live_artifacts(root, require_proxy=True)['steps'], 1)
+            (root/'0000/proxy_rgb.png').unlink()
+            with self.assertRaises(ValueError):
+                check_live_artifacts(root, require_proxy=True)
             (root/'0000/instance_id.png').unlink()
             with self.assertRaises(ValueError):
                 check_live_artifacts(root)
@@ -140,6 +150,10 @@ class IntegratedChainTest(unittest.TestCase):
                            'response_latency_s': .4}]}))
             (root/'live/0000/instance_id.png').write_bytes(b'frame')
             (root/'live/0000/depth.png').write_bytes(b'depth')
+            (root/'live/0000/proxy_rgb.png').write_bytes(b'visible RGB frame')
+            step = json.loads((root/'live/steps.jsonl').read_text())
+            step['frame_paths']['proxy_rgb'] = '0000/proxy_rgb.png'
+            (root/'live/steps.jsonl').write_text(json.dumps(step)+'\n')
             (root/'live/proxy.mp4').write_bytes(b'video')
             (root/'controls.json').write_text('[[0, 0, 0]]')
             record_live_stage(root, .5)
@@ -179,6 +193,11 @@ class IntegratedChainTest(unittest.TestCase):
             from integrated_chain import check_live_stage
             chain = {'timings_s': {'live': .5}}
             self.assertEqual(check_live_stage(root, chain)['implementation'], ADAPTER_IMPLEMENTATION)
+            self.assertEqual(check_live_stage(root, {'implementation': 'integrated_chain.py replay',
+                'timings_s': {'live replay': .5}})['seconds'], .5)
+            with self.assertRaisesRegex(ValueError, 'live stage contract mismatch'):
+                check_live_stage(root, {'implementation': 'integrated_chain.py replay',
+                    'timings_s': {'live replay': .7}})
             session = json.loads((root/'live/session.json').read_text())
             session['implementation']['solver'] = ''
             (root/'live/session.json').write_text(json.dumps(session))

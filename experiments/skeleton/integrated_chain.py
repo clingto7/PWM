@@ -50,6 +50,8 @@ def check_live_stage(root, chain):
     expected_inputs = {'controls.json', *live_files(root, 'scene'), *live_files(root, 'observation')}
     expected_outputs = set(live_files(root, 'live'))
     identity = session.get('implementation')
+    timing_key = 'live replay' if chain.get('implementation') == 'integrated_chain.py replay' else 'live'
+    elapsed = chain.get('timings_s', {}).get(timing_key)
     if (set(stage['inputs']) != expected_inputs or set(stage['outputs']) != expected_outputs
             or not isinstance(identity, dict) or set(identity) != {'session', 'solver', 'renderer'}
             or any(not isinstance(value, str) or not value.strip() for value in identity.values())
@@ -59,7 +61,8 @@ def check_live_stage(root, chain):
             or stage.get('timing') != timing
             or not isinstance(stage.get('seconds'), (int, float))
             or not math.isfinite(stage['seconds']) or stage['seconds'] < 0
-            or abs(stage['seconds'] - chain['timings_s']['live']) > 1e-6):
+            or not isinstance(elapsed, (int, float)) or not math.isfinite(elapsed)
+            or abs(stage['seconds'] - elapsed) > 1e-6):
         raise ValueError('live stage contract mismatch')
     upstream = session.get('scene_and_observation_sha256')
     if (not isinstance(upstream, dict) or 'scene/run.json' not in upstream
@@ -69,7 +72,7 @@ def check_live_stage(root, chain):
     return stage
 
 
-def check_live_artifacts(root):
+def check_live_artifacts(root, *, require_proxy=False):
     session = json.loads((root/'session.json').read_text())
     if session.get('inputs_unchanged') is not True:
         raise ValueError('live session changed upstream artifacts')
@@ -84,6 +87,11 @@ def check_live_artifacts(root):
             raise ValueError(f'live step {index} does not match solved state')
         for name in ('depth', 'instance_id'):
             inside(root, step['frame_paths'][name])
+        if require_proxy:
+            expected = f'{index:04d}/proxy_rgb.png'
+            if step.get('frame_paths', {}).get('proxy_rgb') != expected:
+                raise ValueError(f'live step {index} proxy frame path mismatch')
+            inside(root, expected)
         if any(timing[key] < 0 for key in ('physics_s', 'raster_s', 'writing_s', 'response_latency_s')):
             raise ValueError(f'negative live latency at step {index}')
         if timing['response_latency_s'] + 1e-6 < timing['physics_s'] + timing['raster_s']:
@@ -150,7 +158,7 @@ def check_chain(root):
             raise ValueError(f'upstream changed since live session: {name}')
     if chain['schema'] == 2:
         check_live_stage(root, chain)
-    result = check_live_artifacts(live)
+    result = check_live_artifacts(live, require_proxy=chain['schema'] == 2)
     actual_files = {str(path.relative_to(root)) for path in root.rglob('*')
                     if path.is_file() and path != root/'chain.json'}
     if actual_files != set(chain['artifact_sha256']):

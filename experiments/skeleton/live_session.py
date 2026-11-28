@@ -70,8 +70,22 @@ def save_raster(frame, destination):
     depth = np.where(ids>0,np.clip(metric*1000,1,65535),0).astype(np.uint16)
     Image.fromarray(depth).save(destination/'depth.png')
     Image.fromarray(ids).save(destination/'instance_id.png')
+    colors = np.empty((*ids.shape, 3), dtype=np.uint8)
+    colors[ids == 0] = (42, 62, 91)       # background
+    colors[ids == 1] = (145, 151, 142)    # support surface
+    colors[ids == 2] = (244, 153, 55)     # controlled body
+    static = ids >= 3
+    colors[static] = (58, 166, 105)       # static objects
+    Image.fromarray(colors, 'RGB').save(destination/'proxy_rgb.png')
     return {'depth': str(destination.name+'/depth.png'),
-            'instance_id': str(destination.name+'/instance_id.png')}
+            'instance_id': str(destination.name+'/instance_id.png'),
+            'proxy_rgb': str(destination.name+'/proxy_rgb.png')}
+
+
+def encode_proxy_video(output):
+    subprocess.run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-y', '-framerate', '30',
+        '-i', str(output/'%04d/proxy_rgb.png'), '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+        str(output/'proxy.mp4')], check=True)
 
 
 def distribution(values):
@@ -193,9 +207,7 @@ def main():
             count += 1
     if args.video and count:
         started = time.perf_counter()
-        subprocess.run(['ffmpeg','-hide_banner','-loglevel','error','-y','-framerate','30',
-            '-i',str(args.output/'%04d/instance_id.png'),'-c:v','libx264','-pix_fmt','yuv420p',
-            str(args.output/'proxy.mp4')],check=True)
+        encode_proxy_video(args.output)
         timing_path = args.output/'timings.json'
         timing = json.loads(timing_path.read_text())
         timing['optional_video_writing_s'] = time.perf_counter()-started

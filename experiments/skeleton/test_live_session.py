@@ -7,7 +7,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
-from live_session import LiveSession, hashes
+from live_session import LiveSession, hashes, save_raster, encode_proxy_video
+import numpy as np
+from PIL import Image
+import subprocess
 
 
 class FakeBullet:
@@ -44,6 +47,30 @@ class FakeSource:
 
 
 class LiveSessionTest(unittest.TestCase):
+    def test_rgb_proxy_video_is_visible_and_semantic_frames_remain_exact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ids = np.zeros((32, 32), dtype=np.uint16)
+            ids[:, :8] = 1
+            ids[:, 8:24] = 2
+            ids[:, 24:] = 4
+            frame = (np.full(ids.shape, 2.0, dtype=np.float32), ids)
+            paths = save_raster(frame, root/'0000')
+            self.assertEqual(set(paths), {'depth', 'instance_id', 'proxy_rgb'})
+            np.testing.assert_array_equal(np.asarray(Image.open(root/paths['instance_id'])), ids)
+            rgb = np.asarray(Image.open(root/paths['proxy_rgb']))
+            self.assertEqual(rgb.shape, (32, 32, 3))
+            self.assertGreater(int(rgb[16, 16].max()), 100)
+            self.assertFalse(np.array_equal(rgb[16, 2], rgb[16, 16]))
+            self.assertFalse(np.array_equal(rgb[16, 16], rgb[16, 28]))
+            encode_proxy_video(root)
+            decoded = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(root/'proxy.mp4'),
+                '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'],
+                check=True, stdout=subprocess.PIPE).stdout
+            pixels = np.frombuffer(decoded, dtype=np.uint8).reshape(32, 32, 3)
+            self.assertGreater(int(pixels[16, 16].max()), 80)
+            self.assertFalse(np.array_equal(pixels[16, 2], pixels[16, 16]))
+
     def test_snapshot_includes_bundle_and_saved_observation_inputs(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)/'run'; (root/'inputs').mkdir(parents=True)

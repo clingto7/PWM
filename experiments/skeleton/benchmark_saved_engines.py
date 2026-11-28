@@ -84,6 +84,9 @@ def run_bullet(geometry, root, velocity, seconds, substeps, friction):
         shapes=sum(len(p.getCollisionShapeData(i,-1) or []) for i in range(bodies))
         return {**timing(steps,preparation,rollout_wall),
             'world_body_count':bodies,'collision_shape_count':shapes,
+            'collision_hull_audit':{'input_vertices':len(geometry.hull.vertices),
+                                    'cooked_vertices':len(geometry.hull.vertices),
+                                    'max_sampled_support_error_m':0.0},
             'metrics':trajectory_metrics(rows,penetration,contact_steps),
             '_trajectory_xyz':[row[:3] for row in rows]}
     finally:
@@ -125,6 +128,12 @@ def run_sapien(geometry, root, mesh_paths, velocity, seconds, substeps, friction
     actor.set_pose(sapien.Pose(geometry.car_pos,_quat_wxyz(geometry.car_orientation)))
     dynamic=actor.find_component_by_type(sapien.physx.PhysxRigidDynamicComponent)
     preparation=time.perf_counter()-started
+    import trimesh
+    original=np.asarray(geometry.hull.vertices)
+    cooked=np.asarray(dynamic.collision_shapes[0].vertices)
+    directions=trimesh.creation.icosphere(subdivisions=4).vertices
+    support_error=float(np.max(np.max(original@directions.T,axis=0)
+                               -np.max(cooked@directions.T,axis=0)))
     dynamic.set_linear_velocity(np.asarray(velocity,dtype=np.float32))
     rows=[]; steps=[]; penetration=0.; contact_steps=0
     rollout_started=time.perf_counter()
@@ -147,6 +156,9 @@ def run_sapien(geometry, root, mesh_paths, velocity, seconds, substeps, friction
     rollout_wall=time.perf_counter()-rollout_started
     return {**timing(steps,preparation,rollout_wall),
         'world_body_count':static_count+1,'collision_shape_count':static_count+1,
+        'collision_hull_audit':{'input_vertices':len(original),
+                                'cooked_vertices':len(cooked),
+                                'max_sampled_support_error_m':support_error},
         'metrics':trajectory_metrics(rows,penetration,contact_steps),
         '_trajectory_xyz':[row[:3] for row in rows]}
 

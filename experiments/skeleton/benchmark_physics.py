@@ -81,29 +81,46 @@ def boundaries_equivalent(original, merged, tolerance=1e-8):
     return all(covered(p, merged) for s in original for p in s) and all(covered(p, original) for s in merged for p in s)
 
 
-def create_world(p, geometry, settings, root, hz, substeps, iterations, merged_walls):
+def create_world(p, geometry, settings, root, hz, substeps, iterations, merged_walls, geometry_mode='exact'):
     from physics import contact_solver_parameters
     p.setGravity(0,0,-9.81); p.setTimeStep(1/hz)
     params=contact_solver_parameters()
     params.update(fixedTimeStep=1/hz, numSubSteps=substeps, numSolverIterations=iterations)
     p.setPhysicsEngineParameter(**params)
     g=geometry
-    ground_shape=p.createCollisionShape(p.GEOM_MESH,vertices=g.vertices,indices=g.indices,flags=p.GEOM_FORCE_CONCAVE_TRIMESH)
-    ground=p.createMultiBody(0,ground_shape)
+    plane_ground=geometry_mode in ('plane_ground','all_boxes')
+    box_car=geometry_mode in ('box_car','all_boxes')
+    box_obstacles=geometry_mode in ('box_obstacles','all_boxes')
+    if plane_ground:
+        ground_shape=p.createCollisionShape(p.GEOM_BOX,halfExtents=[100,100,.05])
+        ground=p.createMultiBody(0,ground_shape,basePosition=[0,0,g.flat_z-.05])
+    else:
+        ground_shape=p.createCollisionShape(p.GEOM_MESH,vertices=g.vertices,indices=g.indices,flags=p.GEOM_FORCE_CONCAVE_TRIMESH)
+        ground=p.createMultiBody(0,ground_shape)
     p.changeDynamics(ground,-1,lateralFriction=settings.friction,restitution=0)
     obstacles={}
     for component,(vertices,indices) in zip(g.components,g.obstacle_meshes):
-        shape=-1 if not component['collision_enabled'] else p.createCollisionShape(p.GEOM_MESH,vertices=vertices,indices=indices,flags=p.GEOM_FORCE_CONCAVE_TRIMESH)
-        body=p.createMultiBody(0,shape)
+        if not component['collision_enabled']:
+            shape=-1; position=[0,0,0]
+        elif box_obstacles:
+            import numpy as np
+            points=np.asarray(vertices,dtype=float); lower=points.min(axis=0); upper=points.max(axis=0)
+            shape=p.createCollisionShape(p.GEOM_BOX,halfExtents=((upper-lower)/2).tolist())
+            position=((upper+lower)/2).tolist()
+        else:
+            shape=p.createCollisionShape(p.GEOM_MESH,vertices=vertices,indices=indices,flags=p.GEOM_FORCE_CONCAVE_TRIMESH)
+            position=[0,0,0]
+        body=p.createMultiBody(0,shape,basePosition=position)
         if shape!=-1: p.changeDynamics(body,-1,lateralFriction=settings.friction,restitution=0)
         obstacles[body]=component['instance_id']
     segs=boundary_segments(g,settings.radius)
-    wall_segments=merge_collinear_segments(segs) if merged_walls else segs
+    wall_segments=[] if geometry_mode in ('no_walls','all_boxes') else (merge_collinear_segments(segs) if merged_walls else segs)
     for u,v in wall_segments:
         dx,dy=v[0]-u[0],v[1]-u[1]
         shape=p.createCollisionShape(p.GEOM_BOX,halfExtents=[math.hypot(dx,dy)/2,.04,.5])
         p.createMultiBody(0,shape,basePosition=[(u[0]+v[0])/2,(u[1]+v[1])/2,g.flat_z+.5],baseOrientation=p.getQuaternionFromEuler([0,0,math.atan2(dy,dx)]))
-    hull_shape=p.createCollisionShape(p.GEOM_MESH,vertices=g.hull.vertices.tolist())
+    hull_shape=(p.createCollisionShape(p.GEOM_BOX,halfExtents=[x/2 for x in g.scene['car']['size_m']])
+                if box_car else p.createCollisionShape(p.GEOM_MESH,vertices=g.hull.vertices.tolist()))
     body=p.createMultiBody(g.mass,hull_shape,basePosition=g.car_pos,baseOrientation=g.car_orientation)
     p.changeDynamics(body,-1,lateralFriction=1.,restitution=0,linearDamping=0,angularDamping=0,
                      activationState=p.ACTIVATION_STATE_ENABLE_SLEEPING)
@@ -119,7 +136,7 @@ def run_case(root, geometry, settings, action_vectors, seconds, cfg):
         for action,velocity in action_vectors.items():
             p.resetSimulation()
             started=time.perf_counter()
-            ground,body,obstacles,wall_count,body_count=create_world(p,geometry,settings,root,cfg['hz'],cfg['substeps'],cfg['iterations'],cfg['merged_walls'])
+            ground,body,obstacles,wall_count,body_count=create_world(p,geometry,settings,root,cfg['hz'],cfg['substeps'],cfg['iterations'],cfg['merged_walls'],cfg['geometry_mode'])
             build_times.append(time.perf_counter()-started)
             initial_position=list(p.getBasePositionAndOrientation(body)[0])
             p.resetBaseVelocity(body,linearVelocity=velocity)
@@ -154,6 +171,7 @@ def main(argv=None):
     ap.add_argument('--iterations',type=int,default=100); ap.add_argument('--contact-queries',action='store_true',default=True)
     ap.add_argument('--no-contact-queries',action='store_false',dest='contact_queries')
     ap.add_argument('--merge-walls',action='store_true',default=False); ap.add_argument('--keep-walls',action='store_false',dest='merge_walls')
+    ap.add_argument('--geometry-mode',choices=('exact','no_walls','plane_ground','box_car','box_obstacles','all_boxes'),default='exact')
     ap.add_argument('--seconds',type=float,default=5.); ap.add_argument('--all-actions',action='store_true',help='run coast, ballistic, and obstacle in each configuration')
     ap.add_argument('--substep-sweep',action='store_true',help='run 60/120/240 Hz by 1/2/4/8 substeps')
     ap.add_argument('--sweep',action='store_true',help='full parameter grid, beyond the primary substep sweep')
@@ -165,12 +183,12 @@ def main(argv=None):
     action_vectors={name:spec['delta_velocity_m_s'] for name,spec in impulses.items()
                     if name in (('coast','ballistic','obstacle') if args.all_actions else (args.action,))}
     if args.sweep:
-        configs=[dict(hz=h,substeps=s,iterations=i,contact_queries=c,merged_walls=m)
+        configs=[dict(hz=h,substeps=s,iterations=i,contact_queries=c,merged_walls=m,geometry_mode=args.geometry_mode)
           for h,s,i,c,m in itertools.product((60,120,240),(1,2,4,8),(10,20,50,100),(False,True),(False,True))]
     elif args.substep_sweep:
-        configs=[dict(hz=h,substeps=s,iterations=args.iterations,contact_queries=args.contact_queries,merged_walls=args.merge_walls)
+        configs=[dict(hz=h,substeps=s,iterations=args.iterations,contact_queries=args.contact_queries,merged_walls=args.merge_walls,geometry_mode=args.geometry_mode)
           for h,s in itertools.product((60,120,240),(1,2,4,8))]
-    else: configs=[dict(hz=args.hz,substeps=args.substeps,iterations=args.iterations,contact_queries=args.contact_queries,merged_walls=args.merge_walls)]
+    else: configs=[dict(hz=args.hz,substeps=args.substeps,iterations=args.iterations,contact_queries=args.contact_queries,merged_walls=args.merge_walls,geometry_mode=args.geometry_mode)]
     result={'schema':1,'run_directory':str(root.resolve()),'action':args.action,'all_actions':args.all_actions,'simulated_seconds':args.seconds,
       'actions':list(action_vectors),'cases':[run_case(root,geometry,settings,action_vectors,args.seconds,c) for c in configs]}
     encoded=json.dumps(result,indent=2,sort_keys=True)+'\n'

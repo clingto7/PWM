@@ -50,8 +50,8 @@ def render_saved(root, output, params, yaw_deg=0):
     if not torch.cuda.is_available():
         raise RuntimeError('gpu_raster requires CUDA')
     root, output = Path(root).resolve(), Path(output).resolve()
-    if output.exists() and any(output.iterdir()):
-        raise ValueError(f'gpu raster output is not empty: {output}')
+    if (output/'instance_id').exists() or (output/'depth').exists():
+        raise ValueError(f'gpu raster output channels already exist: {output}')
     geometry = SceneArtifacts(root).load()
     static, car, triangles, entities = geometry_arrays(root, geometry)
     rows = json.loads((root/'trajectory.json').read_text())

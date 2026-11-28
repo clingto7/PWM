@@ -19,7 +19,7 @@ from raster_replay import render_saved
 from physics import api_version
 from artifacts import SceneArtifacts, artifact_hashes, require_unchanged
 from scene import reconstruct
-from first_image_stages import render_saved_scene
+from first_image_stages import render_saved_scene, render_saved_scene_gpu
 from physics import solve_saved_scene
 from stage_contracts import record as record_stage, validate_resume, check as check_stage
 
@@ -113,14 +113,23 @@ def build(args):
     rows = trajectories['coast']
     penetration = penetrations['coast']
     replay_identical = rows == physics_result['replays']['coast']
-    write_json(out/'stage_status.json', {'stage':'raster','status':'running'})
-    render_result = render_saved_scene(out, args, scene, car, target, rows)
+    write_json(out/'stage_status.json', {'stage':'raster','status':'running',
+                                         'renderer':args.main_renderer})
+    render_result = (render_saved_scene_gpu if args.main_renderer == 'gpu_raster'
+                     else render_saved_scene)(out, args, scene, car, target, rows)
     require_unchanged(upstream_hashes, 'renderer')
     raster_frame_times = render_result['raster_frame_times']
     projection_evidence = render_result['projection_evidence']
     actual_bbox = render_result['actual_bbox']
     render_time = render_result['render_time']
-    replay_frame_times=render_saved(out,out/'raster_replay',{'radius_m':args.radius,'friction':args.friction,'obstacles_render_only':args.obstacles_render_only,'seconds':args.seconds})
+    if args.main_renderer == 'gpu_raster':
+        from gpu_raster import render_saved as render_gpu_saved
+        replay_frame_times=render_gpu_saved(out,out/'raster_replay',
+            {'radius_m':args.radius,'seconds':args.seconds,'video_fps':30})['frame_times_s']
+    else:
+        replay_frame_times=render_saved(out,out/'raster_replay',
+            {'radius_m':args.radius,'friction':args.friction,
+             'obstacles_render_only':args.obstacles_render_only,'seconds':args.seconds})
     require_unchanged(upstream_hashes, 'raster replay')
     def in_camera(row):
         qx,qy,qz,qw=row[3:7]
@@ -157,13 +166,15 @@ def build(args):
     record['measurements']['ballistic_in_camera']=ballistic_visible
     record['stages']['simulation_replay']['outputs'].update({name:outputs[name] for name in outputs if name.startswith(('ballistic/','obstacle/')) or name in ('impulses.json','contacts.json')})
     record['scene_artifacts']=list(SceneArtifacts.NAMES)
-    record['adapters']={'physics':'PyBulletSolver','main_renderer':'RasterRenderer','comparison_renderer':'gsplat' if args.render_gaussians else None}
-    record['required_renderers']=['raster'] + (['gaussian'] if args.render_gaussians else [])
+    implementation = 'CudaRasterRenderer' if args.main_renderer == 'gpu_raster' else 'RasterRenderer'
+    record['adapters']={'physics':'PyBulletSolver','main_renderer':implementation,
+                        'comparison_renderer':'gsplat' if args.render_gaussians else None}
+    record['required_renderers']=[args.main_renderer] + (['gaussian'] if args.render_gaussians else [])
     record['raster_frame_times_s']=raster_frame_times
     record['raster_replay']={'trajectory':'trajectory.json','camera':'scene.json','depth_dir':'raster_replay/depth','instance_id_dir':'raster_replay/instance_id','frame_times_s':replay_frame_times}
     record['stages']['raster_replay']={'inputs':{name:outputs[name] for name in ('scene.json','heightmap.npz','obstacles.npz','fitted_car.obj','trajectory.json')},'outputs':{name:value for name,value in outputs.items() if name.startswith('raster_replay/')},'parameters':{'fps':30,'width':w,'height':h,'camera':'original fixed DA3'},'seconds':sum(replay_frame_times)}
     if args.render_gaussians:
-        record['required_renderers']=['raster','gaussian']
+        record['required_renderers']=[args.main_renderer,'gaussian']
     write_json(out/'stage_status.json', {'stage':'contracts','status':'running'})
     # Persist independent, hash-checked boundaries after all legacy outputs exist.
     input_files = list(bundled.values())
@@ -217,7 +228,7 @@ def build(args):
     render_files = [name for name in outputs if name.startswith(('depth/', 'instance_id/'))
                     or name in ('depth.mp4', 'instance_id.mp4', 'initial_projection.json')]
     record_stage(out, 'raster', [*SceneArtifacts.NAMES, 'trajectory.json'], render_files,
-                 'RasterRenderer', '1', record['stages']['proxy_render_video']['parameters'], render_time)
+                 implementation, '1', record['stages']['proxy_render_video']['parameters'], render_time)
     record['stage_contract_schema'] = 1
     record['stage_contracts'] = {stage: f'stages/{stage}.json' for stage in
         ('observation', 'subject_mesh', 'scene', 'actions', 'physics', 'raster')}
@@ -252,6 +263,7 @@ def main(argv=None):
     parser.add_argument('--obstacles-render-only',action='store_true')
     parser.add_argument('--seconds',type=float,default=5)
     parser.add_argument('--render-gaussians',action='store_true',help='also render geometric gsplat frames (requires CUDA)')
+    parser.add_argument('--main-renderer',choices=('raster','gpu_raster'),default='raster')
     parser.add_argument('--scene-only', action='store_true', help='build checked scene and passive trial for online control')
     args=parser.parse_args(argv)
     values=(args.radius,args.angle,args.cell,args.near_depth,args.ground_inlier,args.obstacle_height,args.friction,args.density,args.speed,args.obstacle_min_speed,args.ballistic_up_speed,args.seconds)
@@ -275,8 +287,9 @@ def main(argv=None):
         raise
 
 
-def main_with_arguments(output, bundle, seconds):
-    main([str(output), '--bundle', str(bundle), '--seconds', str(seconds)])
+def main_with_arguments(output, bundle, seconds, main_renderer='raster'):
+    main([str(output), '--bundle', str(bundle), '--seconds', str(seconds),
+          '--main-renderer', main_renderer])
 
 
 if __name__ == '__main__':

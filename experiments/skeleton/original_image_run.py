@@ -23,6 +23,7 @@ def main():
     parser.add_argument('--da3-weights', type=Path, default=observation.DEFAULT_MODELS/'da3nested')
     parser.add_argument('--sam-weights', type=Path, default=observation.DEFAULT_MODELS/'sam21large')
     parser.add_argument('--seconds', type=float, default=5)
+    parser.add_argument('--main-renderer', choices=('raster', 'gpu_raster'), default='raster')
     parser.add_argument('--resume-observation', type=Path,
                         help='reuse a validated original-image observation and rerun fitting')
     args = parser.parse_args()
@@ -47,7 +48,8 @@ def main():
         check(root/'observation', stage)
     verify_mesh(root/'observation/mesh')
     # Retain the established run CLI and its scene, physics, and renderer contracts.
-    first_image_pipeline.main_with_arguments(root/'run', root/'observation', args.seconds)
+    first_image_pipeline.main_with_arguments(root/'run', root/'observation', args.seconds,
+                                             args.main_renderer)
     print(json.dumps({'observation': str(root/'observation'), 'run': str(root/'run')}))
 
 

@@ -97,6 +97,8 @@ def run(image, config, output, resume_observation=None, resume_scene=None, resum
             command = [Path(__file__).with_name('first_image_pipeline.py'), destination/'run',
                        '--bundle', destination/'observation', '--resume-scene', source,
                        '--seconds', data.get('seconds', 5)]
+            if data.get('renderer') == 'gpu_raster':
+                command.extend(['--main-renderer', 'gpu_raster'])
         else:
             if resume_perception:
                 source = resume_perception.resolve()
@@ -121,6 +123,8 @@ def run(image, config, output, resume_observation=None, resume_scene=None, resum
                 data.pop('saved_mesh', None)
             command = [Path(__file__).with_name('original_image_run.py'), image, output/'automatic',
                        '--seconds', data.get('seconds', 5), '--mesh-provider', data.get('mesh_provider', 'hunyuan3d21')]
+            if data.get('renderer') == 'gpu_raster':
+                command.extend(['--main-renderer', 'gpu_raster'])
             for key in SOURCE_KEYS:
                 if key in data:
                     command.extend(['--' + key.replace('_', '-'), data[key]])

@@ -272,9 +272,10 @@ The automatic chain also accepts `gpu_raster` in `renderer` and an optional
 `gsplat_cache_dir` config path for Gaussian runs. `compare` and `replay`
 accept `--gsplat-cache-dir`. Without an explicit path, PyTorch uses its
 standard extension cache or an existing `TORCH_EXTENSIONS_DIR` setting.
-The current image-to-scene build still runs its CPU raster acceptance and
-replay stages before the selected proxy adapter. Selecting `gpu_raster`
-accelerates the adapter render; it does not yet remove those earlier stages.
+When the automatic chain selects `gpu_raster`, the image-to-scene build uses
+the CUDA renderer for its main depth/ID frames, initial projection evidence,
+videos and deterministic replay. The final proxy adapter also uses CUDA.
+Legacy runs and the default `raster` selection keep the CPU renderer.
 
 Scenes created with the image/depth/support fit record `fit_evidence=image_depth_support`
 in their stage parameters. Scene resume requires those parameters to match;

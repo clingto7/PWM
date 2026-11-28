@@ -11,6 +11,18 @@ CLI = Path(__file__).with_name('subject_mesh.py')
 
 
 class SubjectMeshCliTest(unittest.TestCase):
+    def test_generated_mesh_cleanup_drops_only_degenerate_faces(self):
+        import numpy as np
+        import trimesh
+        from subject_mesh import clean_generated_mesh
+        mesh = trimesh.creation.box()
+        faces = np.vstack((mesh.faces, [[0, 0, 1]]))
+        mesh = trimesh.Trimesh(vertices=mesh.vertices, faces=faces, process=False)
+        self.assertFalse(mesh.is_watertight)
+        self.assertEqual(clean_generated_mesh(mesh), 1)
+        self.assertTrue(mesh.is_watertight)
+        self.assertEqual(clean_generated_mesh(mesh), 0)
+
     def test_direct_mesh_input_isolates_distant_mask_component(self):
         import numpy as np
         from PIL import Image

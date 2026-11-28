@@ -13,10 +13,14 @@ import time
 
 def stage(root):
     for name, path in (('scene_physics', root/'automatic/run/stage_status.json'),
+                       ('subject_mesh', root/'automatic/observation/mesh/stage_status.json'),
                        ('observation', root/'automatic/observation/stage_status.json')):
         if path.is_file():
             try:
-                return name + ':' + json.loads(path.read_text())['stage']
+                status = json.loads(path.read_text())
+                if name == 'subject_mesh' and status.get('status') != 'running':
+                    continue
+                return name + ':' + status['stage']
             except (OSError, ValueError, KeyError):
                 pass
     return 'startup'

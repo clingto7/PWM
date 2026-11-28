@@ -184,6 +184,16 @@ def isolate_selected_mask(alpha):
     return cleaned_image, diagnostics
 
 
+def clean_generated_mesh(mesh):
+    """Drop zero-area faces without filling genuine holes or changing valid faces."""
+    valid_faces = mesh.nondegenerate_faces()
+    removed = int(len(valid_faces)-valid_faces.sum())
+    if removed:
+        mesh.update_faces(valid_faces)
+        mesh.remove_unreferenced_vertices()
+    return removed
+
+
 def hunyuan21(image, mask, output, weights):
     if not (weights/'hunyuan3d-dit-v2-1/model.fp16.ckpt').is_file():
         raise ValueError('Hunyuan3D 2.1 local weights required; no download is permitted')
@@ -203,11 +213,15 @@ def hunyuan21(image, mask, output, weights):
     if torch.cuda.is_available():
         torch.cuda.synchronize()
     inference_seconds = time.perf_counter()-inference_start
+    # Shape extraction can append zero-area triangles. They carry no surface
+    # but make an otherwise closed mesh fail the watertightness contract.
+    removed_degenerate_faces = clean_generated_mesh(mesh)
     export_start = time.perf_counter()
     mesh.export(output/'car_shape.glb')
     export_seconds = time.perf_counter()-export_start
     return {'load_seconds': load_seconds, 'inference_seconds': inference_seconds,
             'mesh_export_seconds': export_seconds,
+            'removed_degenerate_faces': removed_degenerate_faces,
             'weight_sha256': digest(weights/'hunyuan3d-dit-v2-1/model.fp16.ckpt')}
 
 

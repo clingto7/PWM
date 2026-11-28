@@ -36,22 +36,27 @@ def run(output, frames):
             intrinsic, 504, 280, render_mode="RGB+ED", packed=False,
             near_plane=.1, far_plane=100)
 
+    def postprocess(image, alpha):
+        ids = image[0, :, :, :3].argmax(-1).to(torch.int16) + 1
+        ids = torch.where(alpha[0, :, :, 0] >= .2, ids, 0)
+        depth = torch.where(ids > 0, image[0, :, :, -1], 0)
+        return ids, depth
+
     started = time.perf_counter()
     image, alpha, _ = render()
     torch.cuda.synchronize()
     first_s = time.perf_counter() - started
     samples = []
+    postprocess_samples = []
     for _ in range(frames):
         started = time.perf_counter()
         image, alpha, _ = render()
         torch.cuda.synchronize()
         samples.append(time.perf_counter() - started)
-    started = time.perf_counter()
-    ids = image[0, :, :, :3].argmax(-1).to(torch.int16) + 1
-    ids = torch.where(alpha[0, :, :, 0] >= .2, ids, 0)
-    depth = torch.where(ids > 0, image[0, :, :, -1], 0)
-    torch.cuda.synchronize()
-    postprocess_s = time.perf_counter() - started
+        started = time.perf_counter()
+        ids, depth = postprocess(image, alpha)
+        torch.cuda.synchronize()
+        postprocess_samples.append(time.perf_counter() - started)
     started = time.perf_counter()
     ids_cpu = ids.cpu().numpy().astype(np.uint16)
     depth_cpu = (depth.cpu().numpy() * 1000).clip(0, 65535).astype(np.uint16)
@@ -70,7 +75,7 @@ def run(output, frames):
               "image_wh": [504, 280], "gaussians": 3,
               "import_s": import_time_s, "first_render_s": first_s,
               "steady_median_ms": statistics.median(samples) * 1000,
-              "gpu_postprocess_ms": postprocess_s * 1000,
+              "gpu_postprocess_median_ms": statistics.median(postprocess_samples) * 1000,
               "readback_ms": readback_s * 1000, "three_png_write_ms": write_s * 1000}
     (output / "measurements.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     return result

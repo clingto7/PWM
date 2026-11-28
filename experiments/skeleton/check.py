@@ -15,10 +15,23 @@ from gates import BASELINE_INITIAL_MASK_IOU, THRESHOLDS
 def check(root):
     record=json.loads((root/'run.json').read_text())
     scene=json.loads((root/'scene.json').read_text())
+    session=json.loads((root/'physics_session.json').read_text()) if (root/'physics_session.json').is_file() else scene
+    if session is not scene:
+        integrity_session_hash = session.get('scene_sha256') == hashlib.sha256((root/'scene.json').read_bytes()).hexdigest()
     trajectory=json.loads((root/'trajectory.json').read_text())
     replay=json.loads((root/'replay_trajectory.json').read_text())
     projection=json.loads((root/'initial_projection.json').read_text())
     integrity={}
+    if session is not scene:
+        integrity['physics_session_scene'] = integrity_session_hash
+        effective_mass = session.get('mass_kg')
+        scene_mass = scene.get('car', {}).get('mass_kg')
+        recorded_mass = record.get('parameters', {}).get('derived_mass_kg', scene_mass)
+        integrity['physics_session_mass'] = (isinstance(effective_mass, (int, float))
+            and not isinstance(effective_mass, bool) and math.isfinite(effective_mass)
+            and effective_mass > 0 and scene_mass is not None and recorded_mass is not None
+            and math.isclose(effective_mass, scene_mass, rel_tol=1e-9)
+            and math.isclose(effective_mass, recorded_mass, rel_tol=1e-9))
     for name,expected in record['outputs'].items():
         path=(root/name).resolve()
         integrity[name]=path.is_relative_to(root) and path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest()==expected
@@ -30,12 +43,29 @@ def check(root):
                 integrity['input:'+name]=False
                 continue
         integrity['input:'+name]=path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest()==entry['sha256']
+    if record.get('stage_contract_schema') == 1:
+        try:
+            contacts = json.loads((root/'contacts.json').read_text())
+            integrity['contacts_record'] = contacts.get('schema') == 1 and all(
+                contacts['cases'][name]['max_contact_penetration_m'] == case['max_contact_penetration_m']
+                and contacts['cases'][name]['obstacle_contact_samples_by_id'] == case['obstacle_contact_samples_by_id']
+                for name, case in record['impulse_cases'].items())
+        except (OSError, ValueError, KeyError, TypeError):
+            integrity['contacts_record'] = False
     for stage in record.get('stages',{}).values():
         for name,expected in stage['outputs'].items():
             integrity['stage_output:'+name]=record['outputs'].get(name)==expected
         for name,expected in stage['inputs'].items():
             source=record['inputs'].get(name,{}).get('sha256',record['outputs'].get(name))
             integrity['stage_input:'+name]=source==expected
+    if record.get('stage_contract_schema') == 1:
+        from stage_contracts import check as check_stage
+        for stage in record.get('stage_contracts', {}):
+            try:
+                check_stage(root, stage)
+                integrity['contract:'+stage] = True
+            except (ValueError, OSError, KeyError, json.JSONDecodeError):
+                integrity['contract:'+stage] = False
     def pixels(runs):
         return {(y,x) for y,x0,x1 in runs for x in range(x0,x1)}
     reference=pixels(projection['reference_runs_y_x0_x1'])
@@ -52,13 +82,38 @@ def check(root):
         return {'passed': False, 'checks': {'hashes': False, 'trajectory_present': False}, 'integrity': integrity}
     final=trajectory[-1]
     surface=ground['flat_world_z_m']
-    resting_error=abs(final[2]-box['size_m'][2]/2-surface)
+    hull_clearance=None
+    support_heights=None
+    support_valid=None
+    if (root/'car_collision_hull.obj').is_file() and (root/'heightmap.npz').is_file():
+        import numpy as np
+        from rest_support import load_obj_vertices, hull_support_clearance
+        hull_vertices=load_obj_vertices(root/'car_collision_hull.obj')
+        with np.load(root/'heightmap.npz') as saved_support:
+            support_heights=(saved_support['ground_z_exact_m'] if 'ground_z_exact_m' in saved_support
+                             else saved_support['ground_z_m'] if 'ground_z_m' in saved_support else None)
+            support_valid=(saved_support['traversable'].astype(bool) if 'traversable' in saved_support
+                           else saved_support['valid'].astype(bool) if 'valid' in saved_support else None)
+        if support_heights is not None and support_valid is not None:
+            def clearance(row):
+                return hull_support_clearance(row,hull_vertices,support_heights,support_valid,ground['cell_m'])
+            hull_clearance=clearance(final)
+    if support_heights is None or support_valid is None:
+        flat_surface=surface
+        def clearance(row):
+            return row[2]-box['size_m'][2]/2-flat_surface
+        hull_clearance=clearance(final)
+    resting_error=abs(hull_clearance) if hull_clearance is not None else math.inf
     final_speed=math.sqrt(sum(v*v for v in final[7:10]))
     # Independent check: kinetic + gravitational energy after impulse.
     # Row zero is stationary before the impulse; exclude the intended energy jump.
     energies=[.5*sum(v*v for v in row[7:10])+9.81*row[2] for row in trajectory[1:]]
     max_gain=max(0,max(v-u for u,v in zip(energies,energies[1:])))
-    metrics={'max_penetration_m':m['max_contact_penetration_m'],'final_resting_height_error_m':resting_error,'final_speed_m_s':final_speed,'max_step_specific_energy_gain_j_kg':max_gain,'replay_trajectory_identical':trajectory==replay,'ground_fit_rms_m':ground['rms_m'],'camera_height_m':ground['height_m'],'camera_pitch_deg':ground['pitch_deg'],'sector_radius_m':params['radius_m'],'sector_angle_deg':params['angle_deg'],'initial_projection_bbox_xyxy':bbox(rendered),'initial_projection_mask_iou':projection_iou}
+    contact_fit=ground.get('contact_fit')
+    fit_rms=(contact_fit['rms_m'] if contact_fit and contact_fit.get('sample_count',0)>=100
+             and contact_fit.get('coverage_fraction',0)>=.05 and contact_fit.get('radius_m')==2.0
+             else ground['rms_m'] if contact_fit is None else math.inf)
+    metrics={'contact_fit_rms_m':contact_fit['rms_m'] if contact_fit else None,'contact_fit_coverage_fraction':contact_fit['coverage_fraction'] if contact_fit else None,'max_penetration_m':m['max_contact_penetration_m'],'final_resting_height_error_m':resting_error,'final_hull_support_clearance_m':hull_clearance,'final_speed_m_s':final_speed,'max_step_specific_energy_gain_j_kg':max_gain,'replay_trajectory_identical':trajectory==replay,'ground_fit_rms_m':ground['rms_m'],'camera_height_m':ground['height_m'],'camera_pitch_deg':ground['pitch_deg'],'sector_radius_m':params['radius_m'],'sector_angle_deg':params['angle_deg'],'initial_projection_bbox_xyxy':bbox(rendered),'initial_projection_mask_iou':projection_iou}
     def gate(value, limit):
         return '未设' if limit is None else value <= limit
     limits=THRESHOLDS.copy()
@@ -68,7 +123,7 @@ def check(root):
             'resting_height':gate(resting_error,limits['resting_height_error_m']),
             'final_speed':gate(final_speed,limits['final_speed_m_s']),
             'no_energy_gain':gate(max_gain,limits['energy_gain_j_kg']),
-            'ground_fit':gate(ground['rms_m'],limits['ground_fit_rms_m']),
+            'ground_fit':gate(fit_rms,limits['ground_fit_rms_m']),
             'replay':trajectory==replay,
             'initial_projection_improved': projection_iou > BASELINE_INITIAL_MASK_IOU,
             'initial_projection_record': projection['frame']=='instance_id/0000.png' and bbox(reference)==projection['reference_bbox_xyxy'] and bbox(rendered)==projection['rendered_bbox_xyxy']==m['initial_projection_bbox_xyxy'] and len(reference&rendered)==projection['intersection_pixels'] and union==projection['union_pixels'] and abs(projection_iou-projection['mask_iou'])<1e-12 and abs(projection_iou-m['initial_projection_mask_iou'])<1e-12,
@@ -84,14 +139,31 @@ def check(root):
             for stage,names in required.items() for name in names)
         checks['mesh_record']=all(name in record['outputs'] for name in ('fitted_car.obj','car_collision_hull.obj')) and fit==m['mesh_fit'] and all(math.isfinite(v) and v>0 for v in size) and math.isfinite(fit['scale']) and fit['scale']>0 and box['collision_shape']=='convex hull of fitted Hunyuan mesh'
         checks['mesh_ground_contact']=abs(fit['position_m'][2]-size[2]/2-surface)<.01
-        checks['size_reasonableness_record']=fit['size_check']['reasonable']==all(.7<=v<=1.3 for v in fit['size_check']['fit_to_reference_ratio'])
+        image_fit = stages.get('ground_fit_scene', {}).get('parameters', {}).get('fit_evidence') == 'image_depth_support'
+        if not image_fit:
+            image_fit = stages.get('scene', {}).get('parameters', {}).get('fit_evidence') == 'image_depth_support'
+        if image_fit:
+            diagnostics = fit.get('diagnostics', {})
+            before, after = diagnostics.get('before', {}), diagnostics.get('after', {})
+            gap = after.get('support_contact_gap_m')
+            penetration = after.get('support_penetration_m')
+            mae = after.get('visible_depth_mae_m')
+            checks['fit_evidence_record'] = (fit.get('fit_trusted') is True and
+                all(entry.get('rendered_silhouette_iou') is not None and
+                    entry.get('visible_depth_mae_m') is not None and
+                    entry.get('support_contact_gap_m') is not None
+                    for entry in (before, after)) and
+                after['rendered_silhouette_iou'] >= THRESHOLDS['initial_mask_iou_min'] and
+                isinstance(mae, (int, float)) and math.isfinite(mae) and
+                isinstance(gap, (int, float)) and -.10 <= gap <= .15 and
+                isinstance(penetration, (int, float)) and math.isfinite(penetration))
         from PIL import Image
         image=Image.open(root/'instance_id/0000.png')
         checks['rendered_silhouette_record']={(y,x) for y in range(image.height) for x in range(image.width) if image.getpixel((x,y))==2}==rendered
         metrics['mesh_size_m']=size
         metrics['mesh_fit_scale']=fit['scale']
         metrics['mesh_fit_yaw_rad']=fit['yaw_rad']
-        metrics['mesh_size_reasonable']=fit['size_check']['reasonable']
+        metrics['fit_trusted']=fit.get('fit_trusted')
     if 'obstacles' in scene:
         stages=record.get('stages',{})
         checks['obstacle_stage_provenance']=all(
@@ -108,6 +180,8 @@ def check(root):
         with np.load(root/'heightmap.npz') as data:
             surface=data['surface_z_m']
             valid=data['valid'].astype(bool)
+            sector=data['sector'].astype(bool) if 'sector' in data else valid
+            support=data['support_evidence'] if 'support_evidence' in data else None
             surface_votes=data['surface_votes']
             surface_provenance=data['surface_provenance']
         components=obstacles['components']
@@ -136,12 +210,18 @@ def check(root):
         detection=obstacles['detection']
         checks['obstacle_parameters']=detection['height_above_plane_m']==params['obstacle_height_m'] and detection['min_pixels_per_cell']==params['obstacle_min_pixels'] and detection['min_cells_per_component']==params['obstacle_min_cells'] and obstacles['render_only']==params['obstacles_render_only']
         checks['obstacle_components']=connected and actual_ids==expected_ids and [c['cells'] for c in components]==sizes and sizes==m['obstacle_component_sizes_cells'] and len(components)==m['obstacle_component_count'] and all(c['cells']>=params['obstacle_min_cells'] for c in components)
-        checks['obstacle_heightmap']=bool(np.array_equal(candidate,valid & ~footprint & (surface-ground['flat_world_z_m']>params['obstacle_height_m']) & (surface_votes>=params['obstacle_min_pixels'])) and np.all(surface_provenance[footprint]==3))
+        checks['obstacle_heightmap']=bool(np.array_equal(candidate,sector & ~footprint & (surface-ground['flat_world_z_m']>params['obstacle_height_m']) & (surface_votes>=params['obstacle_min_pixels'])) and np.all(surface_provenance[footprint]==3))
         checks['obstacle_road_ratio']=road_count>0 and road_count==obstacles['road_cells']==m['road_cells'] and false_count==obstacles['road_false_positive_cells']==m['road_false_positive_cells'] and ratio==obstacles['road_false_positive_ratio']==m['road_false_positive_ratio']
         checks['car_footprint_clear']=not np.any(footprint & (grid>0)) and obstacles['car_footprint_obstacle_cells']==0
         checks['obstacle_render_ids']={1,2}.issubset(image_ids) and image_ids.issubset({1,2}|expected_ids) and not missing_ids
-        checks['obstacle_collision_mode']=all(c['collision_enabled']==(not obstacles['render_only']) and (c['collision_shape_count']>0)==(not obstacles['render_only']) for c in components)
-        metrics.update({'road_false_positive_ratio':ratio,'road_false_positive_cells':false_count,'road_cells':road_count,'obstacle_component_sizes_cells':sizes,'obstacle_rendered_ids':sorted(image_ids & expected_ids),'missing_obstacle_render_ids':missing_ids,'obstacle_collision_shape_counts':[c['collision_shape_count'] for c in components],'obstacles_render_only':obstacles['render_only']})
+        shape_counts=session.get('obstacle_collision_shape_counts_by_id', {})
+        counts=[shape_counts.get(str(c['instance_id']), c.get('collision_shape_count', 0)) for c in components]
+        checks['obstacle_collision_mode']=all((not c['collision_enabled'] or not obstacles['render_only']) and (count>0)==c['collision_enabled'] for c,count in zip(components,counts))
+        if support is not None:
+            evidence=scene['support_evidence']
+            checks['support_evidence']=bool(np.array_equal(valid,support>0) and all(int(np.count_nonzero(support==code))==evidence[name] for code,name in ((0,'unknown_cells'),(1,'visible_cells'),(2,'interpolated_cells'))))
+            metrics['support_evidence']=evidence
+        metrics.update({'road_false_positive_ratio':ratio,'road_false_positive_cells':false_count,'road_cells':road_count,'obstacle_component_sizes_cells':sizes,'obstacle_rendered_ids':sorted(image_ids & expected_ids),'missing_obstacle_render_ids':missing_ids,'obstacle_collision_shape_counts':counts,'obstacles_render_only':obstacles['render_only']})
     cases_record=record.get('impulse_cases',{})
     schema=record.get('schema',1)
     if schema>=2:
@@ -175,26 +255,35 @@ def check(root):
             max_angular_speed=max(math.sqrt(sum(v*v for v in row[10:13])) for row in rows)
             penetration=case['max_contact_penetration_m']
             case_checks={'impulse_record':case['impulse']==impulse and impulse['application_point']=='center_of_mass' and impulse['application_point_world_m']==box['initial_position_m'] and math.isclose(impulse['magnitude_n_s'],params['derived_mass_kg']*speed,rel_tol=1e-9) and all(math.isclose(a,b/speed,abs_tol=1e-9) for a,b in zip(impulse['direction'],delta)),
-                         'friction_record':scene.get('contact_friction')=={'ground_lateral_friction':params['friction'],'car_lateral_friction':1.0,'effective_ground_car_friction':params.get('effective_ground_car_friction'),'obstacle_lateral_friction':0.0} and params.get('effective_ground_car_friction')==params['friction'] and params.get('car_lateral_friction')==1.0,
-                         'sleep_record':scene.get('physics_sleep')=={'car_activation_state':'enable_sleeping','activation_state_value':1} and params.get('car_sleep_activation_state')=='enable_sleeping',
+                         'friction_record':session.get('contact_friction')==({'ground_lateral_friction':params['friction'],'car_lateral_friction':1.0,'effective_ground_car_friction':params.get('effective_ground_car_friction'),'obstacle_lateral_friction':params['friction'],'restitution':0.0} if scene.get('entities') else {'ground_lateral_friction':params['friction'],'car_lateral_friction':1.0,'effective_ground_car_friction':params.get('effective_ground_car_friction'),'obstacle_lateral_friction':0.0}) and params.get('effective_ground_car_friction')==params['friction'] and params.get('car_lateral_friction')==1.0,
+                         'sleep_record':session.get('physics_sleep')=={'car_activation_state':'enable_sleeping','activation_state_value':1} and params.get('car_sleep_activation_state')=='enable_sleeping',
                          'initial_stationary':rows[0][:3]==box['initial_position_m'] and all(abs(v)<1e-12 for v in rows[0][7:13]),
                          'penetration':penetration<=limits['penetration_m'],
-                         'final_rest':end_linear_speed<=limits['final_speed_m_s'] and abs(last[2]-box['size_m'][2]/2-ground['flat_world_z_m'])<=limits['resting_height_error_m'],
+                         'final_rest':end_linear_speed<=limits['final_speed_m_s'] and (clearance(last) is not None and abs(clearance(last))<=limits['resting_height_error_m']),
                          'final_angular_rest':gate(end_angular_speed,limits['final_angular_speed_rad_s']),
                          'inertia_record':inertia is not None and len(inertia)==3 and all(v>0 for v in inertia),
                          'no_energy_gain':gain<=limits['energy_gain_j_kg'] and inertia is not None,
                          'replay':rows==again}
-            case_metrics={'max_penetration_m':penetration,'final_speed_m_s':end_linear_speed,'final_angular_speed_rad_s':end_angular_speed,'max_angular_speed_rad_s':max_angular_speed,'max_step_specific_energy_gain_j_kg':gain}
+            case_metrics={'final_hull_support_clearance_m':clearance(last),'max_penetration_m':penetration,'final_speed_m_s':end_linear_speed,'final_angular_speed_rad_s':end_angular_speed,'max_angular_speed_rad_s':max_angular_speed,'max_step_specific_energy_gain_j_kg':gain}
             if name=='coast':
                 effective_mu=params.get('effective_ground_car_friction',params['friction']**2)
-                expected=speed**2/(2*effective_mu*9.81) if effective_mu else math.inf
+                height_change=last[2]-rows[0][2]
+                # Work-energy balance includes gravity when reconstructed support
+                # rises or falls over the coast path. The flat case is unchanged.
+                expected=max(0.,(speed**2/2-9.81*height_change)/(effective_mu*9.81)) if effective_mu else math.inf
                 actual=math.hypot(last[0]-rows[0][0],last[1]-rows[0][1])
-                case_metrics.update({'coast_distance_m':actual,'expected_distance_m':expected,'distance_error_m':actual-expected})
+                case_metrics.update({'coast_distance_m':actual,'expected_distance_m':expected,
+                                     'distance_error_m':actual-expected,
+                                     'coast_height_change_m':height_change})
                 case_checks['analytical_distance']=gate(abs(actual-expected),limits['coast_distance_error_m'])
             elif name=='ballistic':
                 base=rows[0][2]
-                airborne=[i for i,row in enumerate(rows) if row[2]>base+0.02]
-                landing=next((i for i in range(airborne[-1]+1,len(rows)) if rows[i][2]<=base+0.02),None) if airborne else None
+                # Contact is the first departure from ballistic velocity on
+                # descent. A shallow bounce can exceed the launch clearance
+                # again, so the last height crossing is not the landing.
+                landing=next((i for i in range(2,len(rows))
+                              if rows[i-1][9]<-0.1 and
+                              rows[i][9]-rows[i-1][9]>5*9.81/240),None)
                 expected_time=2*delta[2]/9.81
                 actual_time=landing/240 if landing is not None else math.inf
                 expected_range=math.hypot(*delta[:2])*expected_time

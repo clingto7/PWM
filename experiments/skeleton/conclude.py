@@ -27,6 +27,8 @@ def conclude(root, thresholds=None):
     sound = checks.get('hashes') is True
     projection = metrics.get('initial_projection_mask_iou')
     ground = metrics.get('ground_fit_rms_m')
+    contact_ground = metrics.get('contact_fit_rms_m')
+    fit_ground = contact_ground if contact_ground is not None else ground
     road = metrics.get('road_false_positive_ratio')
     fallback = scene.get('obstacles', {}).get('render_only', record.get('parameters', {}).get('obstacles_render_only'))
     proxy_keys = ['frame_count']
@@ -53,12 +55,13 @@ def conclude(root, thresholds=None):
     solver_decision = '未设' if not cases else (sound and checks.get('impulse_cases') is True and
                                                 all(checks.get(k) is True for k in ('penetration', 'resting_height', 'final_speed', 'no_energy_gain', 'replay')))
     fit = scene.get('car', {}).get('mesh_fit', {})
-    size = fit.get('size_check', {})
     conditions = {
         'vehicle_silhouette': {'iou': projection, 'threshold_min': limits['initial_mask_iou_min'],
                                'decision': decision(projection, limits['initial_mask_iou_min'], minimum=True, evidence=sound and checks.get('initial_projection_record') is True)},
-        'ground_fit': {'rms_m': ground, 'threshold_max_m': limits['ground_fit_rms_m'],
-                       'decision': decision(ground, limits['ground_fit_rms_m'], evidence=sound and checks.get('ground_fit') is True)},
+        'ground_fit': {'rms_m': fit_ground, 'full_support_rms_m': ground,
+                       'contact_fit_coverage_fraction':metrics.get('contact_fit_coverage_fraction'),
+                       'threshold_max_m': limits['ground_fit_rms_m'],
+                       'decision': decision(fit_ground, limits['ground_fit_rms_m'], evidence=sound and checks.get('ground_fit') is True)},
         'road_obstacles': {'false_positive_ratio': road, 'threshold_max': limits['road_false_positive_ratio_max'],
                            'render_only_fallback': fallback, 'proxy_signal_usable': proxy_usable,
                            'decision': road_gate},
@@ -67,8 +70,8 @@ def conclude(root, thresholds=None):
     decisions = [entry['decision'] for entry in conditions.values()]
     report = {'schema': 1, 'source_run_sha256': hashlib.sha256((root / 'run.json').read_bytes()).hexdigest(),
               'source_integrity_passed': sound, 'pipeline_checker_passed': checked['passed'], 'conditions': conditions,
-              'vehicle_size_check': {'reasonable': size.get('reasonable', '未设'), 'fit_to_reference_ratio': size.get('fit_to_reference_ratio'),
-                                     'note': '车型尺寸核对独立于四条失败条件'},
+              'fit_evidence': {'trusted': fit.get('fit_trusted', '未设'),
+                               'diagnostics': fit.get('diagnostics')},
               'timings_s': {'total': '未设', **record.get('timings_s', {})},
               'overall_decision': False if checked['passed'] is not True else (True if all(v is True for v in decisions) else ('未设' if '未设' in decisions and all(v is True or v == '未设' for v in decisions) else False))}
     # The digest covers every report field except the digest itself.

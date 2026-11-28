@@ -3,8 +3,29 @@
 The adapter owns collision-world construction, stepping, and contact
 measurements. A replacement can use the same reconstructed scene files.
 """
+import hashlib
 import math
 import numpy as np
+import json
+import time
+from artifacts import SceneArtifacts
+from physics_actions import action_records, obstacle_launch_speed
+
+
+def write_json(path, value):
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+
+
+def api_version():
+    import pybullet
+    return pybullet.getAPIVersion()
+
+
+def contact_solver_parameters():
+    """Resolve mesh contacts within each 240 Hz recorded state."""
+    return {'fixedTimeStep': 1/240, 'numSubSteps': 8,
+            'numSolverIterations': 100, 'useSplitImpulse': 1,
+            'deterministicOverlappingPairs': 1, 'contactERP': 0.025}
 
 
 class PyBulletSolver:
@@ -33,40 +54,83 @@ class PyBulletSolver:
                     obstacle_contacts[instance_id]=obstacle_contacts.get(instance_id,0)+1
         return rows,penetration,obstacle_contacts
 
-    def create_world(self, geometry, args, out):
+    def trial_without_impulse(self, body, support, steps=120):
+        """Measure initial support contact and passive settling in the adapter world."""
+        p = self.p
+        start = np.asarray(p.getBasePositionAndOrientation(body)[0], dtype=float)
+        initial_contacts = p.getClosestPoints(body, support, distance=2.0)
+        initial_gap = min((float(q[8]) for q in initial_contacts), default=float('inf'))
+        penetration = max(0.0, -initial_gap)
+        for _ in range(steps):
+            p.stepSimulation()
+            penetration = max(penetration, max((max(0.0, -float(q[8])) for q in p.getContactPoints(bodyA=body)), default=0.0))
+        end = np.asarray(p.getBasePositionAndOrientation(body)[0], dtype=float)
+        drift = float(np.linalg.norm(end-start))
+        trusted = bool(initial_gap <= .15 and penetration <= .10 and drift <= .25)
+        return {'trusted': trusted, 'initial_support_gap_m': initial_gap,
+                'max_penetration_m': penetration, 'passive_drift_m': drift,
+                'steps': steps, 'thresholds_m': {'gap': .15, 'penetration': .10, 'drift': .25}}
+
+    def create_world(self, geometry, args, out, solver_parameters=None):
         p=self.p
         vertices=geometry.vertices; indices=geometry.indices
         components=geometry.components; obstacle_meshes=geometry.obstacle_meshes
         half_angle=geometry.half_angle; flat_z=geometry.flat_z
         hull=geometry.hull; mass=geometry.mass
+        expected_mass=float(geometry.scene['car']['density_kg_m3'])*float(geometry.scene['car']['volume_m3'])
+        if not math.isfinite(expected_mass) or expected_mass <= 0 or not math.isclose(mass, expected_mass, rel_tol=1e-9):
+            raise ValueError('dynamic body mass disagrees with density times volume')
         car_pos=geometry.car_pos; car_orientation=geometry.car_orientation
         p.setGravity(0,0,-9.81)
         p.setTimeStep(1/240)
-        p.setPhysicsEngineParameter(fixedTimeStep=1/240, numSolverIterations=100, deterministicOverlappingPairs=1)
+        # Resolve the reconstructed mesh contact eight times per recorded
+        # state. Split impulse corrects overlap in position without injecting
+        # the correction into the body's kinetic energy.
+        parameters = contact_solver_parameters()
+        if solver_parameters is not None:
+            parameters.update(solver_parameters)
+        p.setPhysicsEngineParameter(**parameters)
         ground_collision = p.createCollisionShape(p.GEOM_MESH, vertices=vertices, indices=indices, flags=p.GEOM_FORCE_CONCAVE_TRIMESH)
         ground_visual = p.createVisualShape(p.GEOM_MESH, vertices=vertices, indices=indices, rgbaColor=[.5,.5,.5,1])
         ground = p.createMultiBody(0, ground_collision, ground_visual)
         p.changeDynamics(ground,-1,lateralFriction=args.friction,restitution=0)
         obstacle_bodies={}
         for component,(mesh_vertices,mesh_indices) in zip(components,obstacle_meshes):
-            collision=-1 if args.obstacles_render_only else p.createCollisionShape(p.GEOM_MESH,vertices=mesh_vertices,indices=mesh_indices,flags=p.GEOM_FORCE_CONCAVE_TRIMESH)
+            collision=-1 if not component['collision_enabled'] else p.createCollisionShape(p.GEOM_MESH,vertices=mesh_vertices,indices=mesh_indices,flags=p.GEOM_FORCE_CONCAVE_TRIMESH)
             visual=p.createVisualShape(p.GEOM_MESH,vertices=mesh_vertices,indices=mesh_indices,rgbaColor=[.1,.5,.1,1])
             obstacle_body=p.createMultiBody(0,collision,visual)
             if collision != -1:
-                p.changeDynamics(obstacle_body,-1,lateralFriction=0,restitution=0)
+                p.changeDynamics(obstacle_body,-1,lateralFriction=args.friction,restitution=0)
             obstacle_bodies[obstacle_body]=component['instance_id']
         walls = []
-        # Radial arc and two sector edges are collision-only static segments.
+        # Every exposed traversable-cell edge is an invisible collision wall.
         segments = []
-        for t in np.linspace(-half_angle, half_angle, 65)[:-1]:
+        mask=geometry.traversable
+        cell=geometry.cell_m
+        origin=geometry.origin_x
+        for j,i in np.argwhere(mask):
+            x=origin+i*cell; y=j*cell; half=cell/2
+            if j==0 or not mask[j-1,i]: segments.append(((x-half,y-half),(x+half,y-half)))
+            if j==mask.shape[0]-1 or not mask[j+1,i]: segments.append(((x-half,y+half),(x+half,y+half)))
+            if i==0 or not mask[j,i-1]: segments.append(((x-half,y-half),(x-half,y+half)))
+            if i==mask.shape[1]-1 or not mask[j,i+1]: segments.append(((x+half,y-half),(x+half,y+half)))
+        # Retain the sector edge for compatibility with legacy saved scenes.
+        if 'support_evidence' not in geometry.scene:
+            segments = []
+        for t in np.linspace(-half_angle, half_angle, 65)[:-1] if not segments else ():
             t2 = t + 2*half_angle/64
             segments.append(((args.radius*math.sin(t),args.radius*math.cos(t)),(args.radius*math.sin(t2),args.radius*math.cos(t2))))
-        segments += [((0,0),(args.radius*math.sin(t),args.radius*math.cos(t))) for t in (-half_angle,half_angle)]
+        if not segments:
+            segments += [((0,0),(args.radius*math.sin(t),args.radius*math.cos(t))) for t in (-half_angle,half_angle)]
         for (u,v) in segments:
             dx,dy = v[0]-u[0],v[1]-u[1]
             mid = [(u[0]+v[0])/2,(u[1]+v[1])/2,flat_z+.5]
             shape = p.createCollisionShape(p.GEOM_BOX,halfExtents=[math.hypot(dx,dy)/2,.04,.5])
-            walls.append(p.createMultiBody(0,shape,basePosition=mid,baseOrientation=p.getQuaternionFromEuler([0,0,math.atan2(dy,dx)])))
+            wall = p.createMultiBody(0,shape,basePosition=mid,baseOrientation=p.getQuaternionFromEuler([0,0,math.atan2(dy,dx)]))
+            # PyBullet still creates a visual box for collision-only bodies.
+            # Keep the boundary collider, but remove it from Tiny Renderer.
+            p.changeVisualShape(wall,-1,rgbaColor=[0,0,0,0])
+            walls.append(wall)
         shape = p.createCollisionShape(p.GEOM_MESH, vertices=hull.vertices.tolist())
         visual = p.createVisualShape(p.GEOM_MESH, fileName=str(out/'fitted_car.obj'), rgbaColor=[1,0,0,1])
         body = p.createMultiBody(mass,shape,visual,basePosition=car_pos,baseOrientation=car_orientation)
@@ -75,3 +139,181 @@ class PyBulletSolver:
         p.changeDynamics(body,-1,lateralFriction=1.0,restitution=0,linearDamping=0,angularDamping=0,
                          activationState=p.ACTIVATION_STATE_ENABLE_SLEEPING)
         return ground, body, obstacle_bodies
+
+def solve_saved_scene(out, args, scene, component_ids, tops, actions=None):
+    geometry = SceneArtifacts(out).load()
+    components = scene['obstacles']['components']
+    car_pos = scene['car']['initial_position_m']
+    mass = scene['car']['mass_kg']
+    width, length, _ = scene['car']['size_m']
+    origin_x = -(component_ids.shape[0]-1)/2*args.cell
+    sim_start = time.perf_counter()
+    import pybullet as p
+    client = p.connect(p.DIRECT)
+    try:
+        solver=PyBulletSolver(p)
+        ground, body, obstacle_bodies = solver.create_world(geometry,args,out)
+        trial_started = time.perf_counter()
+        trial = solver.trial_without_impulse(body, ground)
+        trial['seconds'] = time.perf_counter()-trial_started
+        write_json(out/'fit_trial.json', trial)
+        from PIL import Image, ImageDraw
+        visual = Image.new('RGB', (360, 100), 'white')
+        draw = ImageDraw.Draw(visual)
+        for row, (label, value) in enumerate((('gap', trial['initial_support_gap_m']),
+                                               ('penetration', trial['max_penetration_m']),
+                                               ('drift', trial['passive_drift_m']))):
+            draw.text((4, 8+row*30), f'{label}: {value:.4f} m', fill='black')
+            draw.rectangle((145, 10+row*30, 145+min(200, int(abs(value)*400)) if math.isfinite(value) else 345, 24+row*30),
+                           fill='red' if not trial['trusted'] else 'green')
+        visual.save(out/'fit_trial.png')
+        if not trial['trusted']:
+            raise ValueError('untrusted initial subject fit: see fit_trial.json')
+        p.disconnect(client); client=p.connect(p.DIRECT)
+        ground, body, obstacle_bodies = solver.create_world(geometry,args,out)
+        inertia_diagonal=list(p.getDynamicsInfo(body,-1)[2])
+        effective_mass=float(p.getDynamicsInfo(body,-1)[0])
+        if not math.isclose(effective_mass, mass, rel_tol=1e-9):
+            raise RuntimeError('engine mass disagrees with saved scene')
+        shape_counts={instance_id:len(p.getCollisionShapeData(obstacle_body,-1)) for obstacle_body,instance_id in obstacle_bodies.items()}
+        for component in components:
+            count=shape_counts[component['instance_id']]
+            if bool(count)!=component['collision_enabled']:
+                raise RuntimeError('obstacle collision shape disagrees with fallback mode')
+        session={'schema':1, 'solver':'PyBulletSolver',
+                 'scene_sha256':hashlib.sha256((out/'scene.json').read_bytes()).hexdigest(),
+                 'mass_kg':effective_mass,
+                 'obstacle_collision_shape_counts_by_id':shape_counts}
+        session['contact_friction']={'ground_lateral_friction':args.friction,'car_lateral_friction':1.0,'effective_ground_car_friction':args.friction,'obstacle_lateral_friction':args.friction,'restitution':0.0}
+        session['physics_sleep']={'car_activation_state':'enable_sleeping','activation_state_value':p.ACTIVATION_STATE_ENABLE_SLEEPING}
+        settings=contact_solver_parameters()
+        session['physics_solver']={'fixed_time_step_s':settings['fixedTimeStep'],
+                                 'solver_iterations':settings['numSolverIterations'],
+                                 'substeps_per_recorded_state':settings['numSubSteps'],
+                                 'split_impulse':bool(settings['useSplitImpulse']),
+                                 'deterministic_overlapping_pairs':bool(settings['deterministicOverlappingPairs']),
+                                 'contact_erp':settings['contactERP'],
+                                 'effective_engine_parameters':p.getPhysicsEngineParameters()}
+        write_json(out/'physics_session.json',session)
+        targets=[]
+        solid_ids={c['instance_id'] for c in components if c['collision_enabled']}
+        for cy,cx in np.argwhere(np.isin(component_ids,list(solid_ids))):
+            x,y=origin_x+cx*args.cell,cy*args.cell
+            distance=math.hypot(x-car_pos[0],y-car_pos[1])
+            if distance>max(width,length) and tops[cy,cx]>car_pos[2]:
+                targets.append((distance,x,y,int(component_ids[cy,cx])))
+        obstacle_target=min(targets) if targets else None
+        if obstacle_target:
+            distance,x,y,target_id=obstacle_target
+            direction=np.array([x-car_pos[0],y-car_pos[1],0.])/distance
+            half_extent=abs(direction[0])*width/2+abs(direction[1])*length/2+args.cell/2
+            travel_to_contact=max(0.,distance-half_extent)
+            obstacle_speed=obstacle_launch_speed(args.friction,travel_to_contact,args.obstacle_min_speed)
+        else:
+            direction=np.array([0.,1.,0.]);obstacle_speed=args.speed;target_id=None
+        impulses = actions if actions is not None else {'coast':[0.,args.speed,0.], 'ballistic':[0.,args.speed,args.ballistic_up_speed], 'obstacle':(direction*obstacle_speed).tolist()}
+        specifications = action_records(impulses, mass, car_pos)
+        if actions is None:
+            specifications['obstacle']['target_obstacle_id'] = target_id
+        trajectories={};penetrations={};replays={};hits={}
+        for name,velocity in impulses.items():
+            if name!='coast':
+                p.disconnect(client);client=p.connect(p.DIRECT)
+                ground,body,obstacle_bodies=solver.create_world(geometry,args,out)
+            case_rows,penetrations[name],hits[name]=solver.solve(body,obstacle_bodies,velocity,args.seconds)
+            p.disconnect(client);client=p.connect(p.DIRECT)
+            ground,body,obstacle_bodies=solver.create_world(geometry,args,out)
+            replay,_,_=solver.solve(body,obstacle_bodies,velocity,args.seconds)
+            trajectories[name]=case_rows;replays[name]=replay
+            prefix='' if name=='coast' else name+'/'
+            if name!='coast': (out/name).mkdir(exist_ok=True)
+            write_json(out/(prefix+'trajectory.json'),case_rows)
+            write_json(out/(prefix+'replay_trajectory.json'),replay)
+        if any(len(rows) != int(args.seconds * solver.hz) for rows in trajectories.values()):
+            raise RuntimeError('physics trajectory has unexpected frame count')
+        write_json(out/'impulses.json',specifications)
+        sim_time=time.perf_counter()-sim_start
+        write_json(out/'contacts.json', {'schema': 1, 'cases': {
+            name: {'max_contact_penetration_m': penetrations[name],
+                   'obstacle_contact_samples_by_id': hits[name]}
+            for name in impulses}})
+        session['fit_trial'] = trial
+        session['inertia_diagonal_kg_m2'] = inertia_diagonal
+        session['actions'] = 'impulses.json'
+        session['contacts'] = 'contacts.json'
+        session['trajectory_by_case'] = {name: ('' if name == 'coast' else name + '/') + 'trajectory.json'
+                                         for name in impulses}
+        write_json(out/'physics_session.json', session)
+        return {'inertia_diagonal': inertia_diagonal, 'trajectories': trajectories,
+                'penetrations': penetrations, 'replays': replays, 'hits': hits,
+                'specifications': specifications, 'impulses': impulses,
+                'sim_time': time.perf_counter()-sim_start}
+    except Exception as exc:
+        write_json(out/'physics_failure.json', {'stage':'physics','reason':str(exc),'type':type(exc).__name__})
+        raise
+    finally:
+        p.disconnect(client)
+
+
+class BulletRasterSession:
+    """Renderer-facing frame source; Bullet handles never leave this adapter."""
+    def __init__(self, artifacts, args, width, height, near, far, projection):
+        self.artifacts=artifacts;self.args=args
+        self.width=width;self.height=height;self.near=near;self.far=far
+        self.projection=projection
+
+    def __enter__(self):
+        import pybullet as p
+        self.p=p
+        self.client=p.connect(p.DIRECT)
+        try:
+            geometry=self.artifacts.load()
+            self.ground,self.body,self.obstacles=PyBulletSolver(p).create_world(
+                geometry,self.args,self.artifacts.root)
+            camera=geometry.scene['camera']
+            self.camera_forward=camera['forward']
+            self.camera_up=camera['up']
+            self.view=p.computeViewMatrix([0,0,0],camera['forward'],camera['up'])
+            return self
+        except BaseException:
+            p.disconnect(self.client)
+            raise
+
+    def __exit__(self, *_):
+        self.p.disconnect(self.client)
+
+    def set_camera_yaw(self, yaw_deg):
+        """Rotate the saved camera about its up axis for a nearby geometry view."""
+        forward=np.asarray(self.camera_forward,dtype=float)
+        up=np.asarray(self.camera_up,dtype=float)
+        axis=up/np.linalg.norm(up)
+        angle=math.radians(yaw_deg)
+        direction=(forward*math.cos(angle)+np.cross(axis,forward)*math.sin(angle)
+                   +axis*np.dot(axis,forward)*(1-math.cos(angle)))
+        self.view=self.p.computeViewMatrix([0,0,0],direction.tolist(),up.tolist())
+
+    def frame(self, row):
+        p=self.p
+        p.resetBasePositionAndOrientation(self.body,row[:3],row[3:7])
+        return self.frame_current()
+
+    def frame_current(self):
+        """Rasterize the live body without changing its physics state."""
+        p=self.p
+        _,_,_,zbuf,seg=p.getCameraImage(self.width,self.height,
+            viewMatrix=self.view,projectionMatrix=self.projection,
+            renderer=p.ER_TINY_RENDERER,
+            flags=p.ER_SEGMENTATION_MASK_OBJECT_AND_LINKINDEX)
+        raw=np.asarray(seg,dtype=np.int32).reshape(self.height,self.width)
+        ids=np.zeros((self.height,self.width),dtype=np.uint16)
+        ids[(raw & 0xffffff)==self.ground]=1
+        ids[(raw & 0xffffff)==self.body]=2
+        for handle,instance_id in self.obstacles.items():
+            ids[(raw & 0xffffff)==handle]=instance_id
+        ids[raw<0]=0
+        unmapped = (raw >= 0) & (ids == 0)
+        if np.any(unmapped):
+            raise ValueError(f'unmapped visual body in raster frame: {int(np.count_nonzero(unmapped))} pixels')
+        zbuf=np.asarray(zbuf).reshape(self.height,self.width)
+        metric=self.far*self.near/(self.far-(self.far-self.near)*zbuf)
+        return metric,ids

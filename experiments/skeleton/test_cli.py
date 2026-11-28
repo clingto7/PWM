@@ -17,6 +17,87 @@ CONCLUDE=CHECK.with_name('conclude.py')
 
 
 class CheckCliTest(unittest.TestCase):
+    def test_saved_session_rejects_scene_or_observation_hash_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); rec=self.fixture(root)
+            image=root/'inputs/input.jpg'; image.parent.mkdir()
+            image.write_bytes(b'original observation')
+            rec['inputs']['image']={'path':'inputs/input.jpg',
+                                    'sha256':hashlib.sha256(image.read_bytes()).hexdigest()}
+            scene=json.loads((root/'scene.json').read_text())
+            scene['car']['mass_kg']=1200.0
+            (root/'scene.json').write_text(json.dumps(scene))
+            rec['outputs']['scene.json']=hashlib.sha256((root/'scene.json').read_bytes()).hexdigest()
+            rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
+            session={'schema':1, 'scene_sha256':rec['outputs']['scene.json'], 'mass_kg':1200.0}
+            (root/'physics_session.json').write_text(json.dumps(session))
+            rec['outputs']['physics_session.json']=hashlib.sha256((root/'physics_session.json').read_bytes()).hexdigest()
+            (root/'run.json').write_text(json.dumps(rec))
+            valid=json.loads(self.invoke(root).stdout)
+            self.assertTrue(valid['integrity']['physics_session_scene'])
+            self.assertTrue(valid['integrity']['physics_session_mass'])
+            self.assertTrue(valid['integrity']['input:image'])
+            session['mass_kg']=900.0
+            (root/'physics_session.json').write_text(json.dumps(session))
+            rec['outputs']['physics_session.json']=hashlib.sha256((root/'physics_session.json').read_bytes()).hexdigest()
+            (root/'run.json').write_text(json.dumps(rec))
+            bad=json.loads(self.invoke(root).stdout)
+            self.assertFalse(bad['integrity']['physics_session_mass'])
+            self.assertFalse(bad['checks']['hashes'])
+            session['mass_kg']=1200.0
+            session['scene_sha256']='0'*64
+            (root/'physics_session.json').write_text(json.dumps(session))
+            rec['outputs']['physics_session.json']=hashlib.sha256((root/'physics_session.json').read_bytes()).hexdigest()
+            (root/'run.json').write_text(json.dumps(rec))
+            bad=json.loads(self.invoke(root).stdout)
+            self.assertFalse(bad['integrity']['physics_session_scene'])
+            self.assertFalse(bad['checks']['hashes'])
+            image.write_bytes(b'changed observation')
+            bad=json.loads(self.invoke(root).stdout)
+            self.assertFalse(bad['integrity']['input:image'])
+
+    def test_incomplete_historical_heightmap_uses_legacy_rest_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);rec=self.fixture(root)
+            (root/'car_collision_hull.obj').write_text('v 0 0 0\n')
+            np.savez_compressed(root/'heightmap.npz',ground_z_m=np.zeros((2,2),dtype=float))
+            rec['outputs']['heightmap.npz']=hashlib.sha256((root/'heightmap.npz').read_bytes()).hexdigest()
+            rec['stages']['scene']['outputs']['heightmap.npz']=rec['outputs']['heightmap.npz']
+            (root/'run.json').write_text(json.dumps(rec))
+            result=self.invoke(root)
+            self.assertTrue(result.stdout,result.stderr)
+            report=json.loads(result.stdout)
+            self.assertEqual(report['metrics']['final_resting_height_error_m'],0)
+
+    def test_contact_fit_gate_keeps_full_support_error_visible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);rec=self.fixture(root)
+            scene=json.loads((root/'scene.json').read_text())
+            scene['ground']['rms_m']=.0356
+            scene['ground']['contact_fit']={'rms_m':.0068,'sample_count':21000,
+                'coverage_fraction':.30,'radius_m':2.0,
+                'method':'metric-radius observed support around subject ground-contact ray'}
+            (root/'scene.json').write_text(json.dumps(scene))
+            rec['outputs']['scene.json']=hashlib.sha256((root/'scene.json').read_bytes()).hexdigest()
+            rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
+            (root/'run.json').write_text(json.dumps(rec))
+            result=self.invoke(root)
+            report=json.loads(result.stdout)
+            self.assertTrue(report['checks']['ground_fit'])
+            self.assertAlmostEqual(report['metrics']['ground_fit_rms_m'],.0356)
+            self.assertAlmostEqual(report['metrics']['contact_fit_rms_m'],.0068)
+            subprocess.run([sys.executable,str(CONCLUDE),str(root)],capture_output=True,text=True)
+            conclusion=json.loads((root/'first_round_conclusion.json').read_text())
+            self.assertTrue(conclusion['conditions']['ground_fit']['decision'])
+            self.assertAlmostEqual(conclusion['conditions']['ground_fit']['full_support_rms_m'],.0356)
+            scene['ground']['contact_fit']['coverage_fraction']=.01
+            (root/'scene.json').write_text(json.dumps(scene))
+            rec['outputs']['scene.json']=hashlib.sha256((root/'scene.json').read_bytes()).hexdigest()
+            rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
+            (root/'run.json').write_text(json.dumps(rec))
+            report=json.loads(self.invoke(root).stdout)
+            self.assertFalse(report['checks']['ground_fit'])
+
     def test_conclusion_cli_hash_unset_gates_and_timing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);rec=self.fixture(root)
@@ -36,20 +117,20 @@ class CheckCliTest(unittest.TestCase):
             self.assertEqual(report['overall_decision'],'未设')
             self.assertEqual(report['timings_s']['total'],4.5)
 
-    def test_conclusion_preserves_failed_size_check_and_detects_tampering(self):
+    def test_conclusion_preserves_untrusted_fit_and_detects_tampering(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);rec=self.fixture(root)
             scene=json.loads((root/'scene.json').read_text())
-            scene['car']['mesh_fit']={'size_check':{'reasonable':False,'fit_to_reference_ratio':[.665,.601,.635]}}
+            scene['car']['mesh_fit']={'fit_trusted':False}
             (root/'scene.json').write_text(json.dumps(scene))
             rec['outputs']['scene.json']=hashlib.sha256((root/'scene.json').read_bytes()).hexdigest()
             rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
             (root/'run.json').write_text(json.dumps(rec))
             process=subprocess.run([sys.executable,str(CONCLUDE),str(root)],capture_output=True,text=True)
-            # Legacy fixture has no Hunyuan input, so size evidence is reported without mesh checks.
+            # Legacy fixture has no Hunyuan input, so fit evidence is reported without mesh checks.
             self.assertEqual(process.returncode,1,process.stderr)
             report=json.loads((root/'first_round_conclusion.json').read_text())
-            self.assertFalse(report['vehicle_size_check']['reasonable'])
+            self.assertFalse(report['fit_evidence']['trusted'])
             (root/'depth/0000.png').write_bytes(b'tampered')
             subprocess.run([sys.executable,str(CONCLUDE),str(root)],capture_output=True,text=True)
             report=json.loads((root/'first_round_conclusion.json').read_text())
@@ -503,10 +584,25 @@ class CheckCliTest(unittest.TestCase):
                 (root/'run.json').write_text(json.dumps(rec))
                 return report['metrics']['impulse_cases'][name]
             expected_coast=1/9.81
+            def bounce_after_impact(rows):
+                impact=next(i for i in range(2,len(rows)) if rows[i][9]-rows[i-1][9]>1)
+                for i in range(impact+1,min(impact+35,len(rows))):
+                    rows[i][2]=.53
+                    rows[i][1]=rows[impact][1]+.2
+                rows[min(impact+35,len(rows)-1)][2]=.5
+            bounced=altered_case('ballistic',bounce_after_impact)
+            self.assertTrue(bounced['checks']['analytical_flight'])
             near=altered_case('coast',lambda rows:rows[-1].__setitem__(1,expected_coast+.019))
             far=altered_case('coast',lambda rows:rows[-1].__setitem__(1,expected_coast+.021))
             self.assertTrue(near['checks']['analytical_distance'])
             self.assertFalse(far['checks']['analytical_distance'])
+            uphill=altered_case('coast',lambda rows:(rows[-1].__setitem__(2,.509),
+                rows[-1].__setitem__(1,expected_coast-.009/.5-.019)))
+            uphill_far=altered_case('coast',lambda rows:(rows[-1].__setitem__(2,.509),
+                rows[-1].__setitem__(1,expected_coast-.009/.5-.021)))
+            self.assertTrue(uphill['checks']['analytical_distance'])
+            self.assertFalse(uphill_far['checks']['analytical_distance'])
+            self.assertAlmostEqual(uphill['metrics']['expected_distance_m'],expected_coast-.009/.5)
             landing=int(cases['ballistic']['metrics']['flight_time_s']*240)
             range_near=altered_case('ballistic',lambda rows:rows[landing].__setitem__(1,4/9.81+.049))
             range_far=altered_case('ballistic',lambda rows:rows[landing].__setitem__(1,4/9.81+.051))
@@ -522,7 +618,9 @@ class CheckCliTest(unittest.TestCase):
             self.assertFalse(xy_far['checks']['analytical_flight'])
             def land_at(index):
                 def change(rows):
-                    for row in rows[index:]:row[2]=.5
+                    for row in rows[index:]:
+                        row[2]=.5
+                        row[9]=0
                 return change
             time_near=altered_case('ballistic',land_at(94))
             time_far=altered_case('ballistic',land_at(92))
@@ -576,7 +674,10 @@ class CheckCliTest(unittest.TestCase):
             im=Image.new('L',(4,4),0);im.putpixel((1,1),2);im.putpixel((2,1),2)
             im.save(root/'instance_id/0000.png')
             fit={'scale':1.0,'yaw_rad':0.0,'position_m':[0,0,.5], 'size_m':[1,2,1],
-                 'size_check':{'reasonable':True,'fit_to_reference_ratio':[1,1,1]}}
+                 'fit_trusted':True, 'diagnostics':{stage:{'rendered_silhouette_iou':.9,
+                     'visible_depth_mae_m':.1,'support_contact_gap_m':0,
+                     'support_penetration_m':0}
+                     for stage in ('before','after')}}
             scene=json.loads((root/'scene.json').read_text())
             scene['car'].update(mesh_fit=fit,collision_shape='convex hull of fitted Hunyuan mesh')
             (root/'scene.json').write_text(json.dumps(scene))
@@ -588,12 +689,27 @@ class CheckCliTest(unittest.TestCase):
             for name in ('scene.json','instance_id/0000.png','fitted_car.obj','car_collision_hull.obj'):
                 rec['outputs'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
             rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
+            rec['stages']['scene']['parameters']={'fit_evidence':'image_depth_support'}
             rec['stages']['simulation_replay']={'inputs':{name:rec['outputs'][name] for name in ('fitted_car.obj','car_collision_hull.obj')},'outputs':{}}
             rec['stages']['proxy_render_video']={'inputs':{'fitted_car.obj':rec['outputs']['fitted_car.obj']},'outputs':{}}
             (root/'run.json').write_text(json.dumps(rec))
             good=self.invoke(root)
             self.assertEqual(good.returncode,0,good.stderr+good.stdout)
+            self.assertTrue(json.loads(good.stdout)['checks']['fit_evidence_record'])
             self.assertTrue(json.loads(good.stdout)['checks']['rendered_silhouette_record'])
+            scene['car']['mesh_fit']['diagnostics']['after']['support_contact_gap_m']=.16
+            (root/'scene.json').write_text(json.dumps(scene))
+            rec['measurements']['mesh_fit']=scene['car']['mesh_fit']
+            rec['outputs']['scene.json']=hashlib.sha256((root/'scene.json').read_bytes()).hexdigest()
+            rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
+            (root/'run.json').write_text(json.dumps(rec))
+            self.assertFalse(json.loads(self.invoke(root).stdout)['checks']['fit_evidence_record'])
+            scene['car']['mesh_fit']['diagnostics']['after']['support_contact_gap_m']=0
+            (root/'scene.json').write_text(json.dumps(scene))
+            rec['measurements']['mesh_fit']=scene['car']['mesh_fit']
+            rec['outputs']['scene.json']=hashlib.sha256((root/'scene.json').read_bytes()).hexdigest()
+            rec['stages']['scene']['outputs']['scene.json']=rec['outputs']['scene.json']
+            (root/'run.json').write_text(json.dumps(rec))
             del rec['stages']['simulation_replay']['inputs']['car_collision_hull.obj']
             (root/'run.json').write_text(json.dumps(rec))
             missing=self.invoke(root)
@@ -611,7 +727,10 @@ class CheckCliTest(unittest.TestCase):
             ids=np.array([[3,3,0,0],[1,2,2,0]],dtype=np.uint16)
             Image.fromarray(ids).save(root/'instance_id/0000.png')
             fit={'scale':1.0,'yaw_rad':0.0,'position_m':[0,0,.5], 'size_m':[1,2,1],
-                 'size_check':{'reasonable':True,'fit_to_reference_ratio':[1,1,1]}}
+                 'fit_trusted':True, 'diagnostics':{stage:{'rendered_silhouette_iou':.9,
+                     'visible_depth_mae_m':.1,'support_contact_gap_m':0,
+                     'support_penetration_m':0}
+                     for stage in ('before','after')}}
             scene=json.loads((root/'scene.json').read_text())
             scene['car'].update(mesh_fit=fit,collision_shape='convex hull of fitted Hunyuan mesh')
             (root/'scene.json').write_text(json.dumps(scene))

@@ -88,7 +88,9 @@ def sampled_hull(geometry, subdivisions):
     vertices=np.asarray(geometry.hull.vertices)
     directions=trimesh.creation.icosphere(subdivisions=subdivisions).vertices
     selected=vertices[np.unique(np.argmax(vertices@directions.T,axis=0))]
-    probe_directions=trimesh.creation.icosphere(subdivisions=3).vertices
+    # Use a denser, independent direction set to avoid reporting zero error
+    # merely because the evaluation directions were also used for selection.
+    probe_directions=trimesh.creation.icosphere(subdivisions=4).vertices
     support_error=float(np.max(np.max(vertices@probe_directions.T,axis=0)
                                -np.max(selected@probe_directions.T,axis=0)))
     proxy=SimpleNamespace(**vars(geometry))

@@ -30,12 +30,21 @@ def depth_live(image, destination, weights):
         raise ValueError('DA3 local weights required; no model download is permitted')
     import numpy as np
     import torch
-    # Some A800 environments expose torchvision's Python transforms without its
-    # compiled NMS operator. DA3 only needs the transforms, but torchvision's
-    # import registers a fake NMS kernel and requires the operator schema.
-    if not hasattr(torch.ops.torchvision, 'nms'):
+    # Load torchvision's compiled ops before deciding whether a compatibility
+    # schema is needed. Looking up torch.ops first misses operators that are
+    # registered only during torchvision import and can duplicate NMS on a
+    # host with a working binary extension.
+    try:
+        import torchvision
+    except RuntimeError as exc:
+        if 'operator torchvision::nms does not exist' not in str(exc):
+            raise
+        for name in list(sys.modules):
+            if name == 'torchvision' or name.startswith('torchvision.'):
+                del sys.modules[name]
         nms_schema = torch.library.Library('torchvision', 'FRAGMENT')
         nms_schema.define('nms(Tensor dets, Tensor scores, float iou_threshold) -> Tensor')
+        import torchvision
     from depth_anything_3.api import DepthAnything3
     load_started = time.perf_counter()
     model = DepthAnything3.from_pretrained(str(weights)).to('cuda').eval()

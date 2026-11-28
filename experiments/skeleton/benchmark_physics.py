@@ -81,6 +81,23 @@ def boundaries_equivalent(original, merged, tolerance=1e-8):
     return all(covered(p, merged) for s in original for p in s) and all(covered(p, original) for s in merged for p in s)
 
 
+def sampled_hull(geometry, subdivisions):
+    """Benchmark a smaller convex collision hull from directional support points."""
+    import numpy as np
+    import trimesh
+    vertices=np.asarray(geometry.hull.vertices)
+    directions=trimesh.creation.icosphere(subdivisions=subdivisions).vertices
+    selected=vertices[np.unique(np.argmax(vertices@directions.T,axis=0))]
+    probe_directions=trimesh.creation.icosphere(subdivisions=3).vertices
+    support_error=float(np.max(np.max(vertices@probe_directions.T,axis=0)
+                               -np.max(selected@probe_directions.T,axis=0)))
+    proxy=SimpleNamespace(**vars(geometry))
+    proxy.hull=SimpleNamespace(vertices=selected)
+    return proxy,{'original_vertices':len(vertices),'sampled_vertices':len(selected),
+                  'sampled_support_error_m':support_error,
+                  'sampling_directions':len(directions)}
+
+
 def create_world(p, geometry, settings, root, hz, substeps, iterations, merged_walls, geometry_mode='exact'):
     from physics import contact_solver_parameters
     p.setGravity(0,0,-9.81); p.setTimeStep(1/hz)
@@ -172,11 +189,16 @@ def main(argv=None):
     ap.add_argument('--no-contact-queries',action='store_false',dest='contact_queries')
     ap.add_argument('--merge-walls',action='store_true',default=False); ap.add_argument('--keep-walls',action='store_false',dest='merge_walls')
     ap.add_argument('--geometry-mode',choices=('exact','no_walls','plane_ground','box_car','box_obstacles','all_boxes'),default='exact')
+    ap.add_argument('--hull-support-subdivisions',type=int,choices=(1,2,3),
+                    help='replace saved convex hull with directional support sample for this benchmark only')
     ap.add_argument('--seconds',type=float,default=5.); ap.add_argument('--all-actions',action='store_true',help='run coast, ballistic, and obstacle in each configuration')
     ap.add_argument('--substep-sweep',action='store_true',help='run 60/120/240 Hz by 1/2/4/8 substeps')
     ap.add_argument('--sweep',action='store_true',help='full parameter grid, beyond the primary substep sweep')
     ap.add_argument('--output',type=Path); args=ap.parse_args(argv)
     root=args.run_directory; geometry=SceneArtifacts(root).load()
+    hull_sampling=None
+    if args.hull_support_subdivisions is not None:
+        geometry,hull_sampling=sampled_hull(geometry,args.hull_support_subdivisions)
     run=json.loads((root/'run.json').read_text()); impulses=json.loads((root/'impulses.json').read_text())
     friction=run['parameters']['friction']; radius=run['parameters']['radius_m']
     settings=SimpleNamespace(friction=friction,radius=radius)
@@ -190,6 +212,7 @@ def main(argv=None):
           for h,s in itertools.product((60,120,240),(1,2,4,8))]
     else: configs=[dict(hz=args.hz,substeps=args.substeps,iterations=args.iterations,contact_queries=args.contact_queries,merged_walls=args.merge_walls,geometry_mode=args.geometry_mode)]
     result={'schema':1,'run_directory':str(root.resolve()),'action':args.action,'all_actions':args.all_actions,'simulated_seconds':args.seconds,
+      'hull_sampling':hull_sampling,
       'actions':list(action_vectors),'cases':[run_case(root,geometry,settings,action_vectors,args.seconds,c) for c in configs]}
     encoded=json.dumps(result,indent=2,sort_keys=True)+'\n'
     if args.output: args.output.write_text(encoded)

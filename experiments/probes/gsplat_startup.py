@@ -50,11 +50,19 @@ def run(output, frames):
     ids = image[0, :, :, :3].argmax(-1).to(torch.int16) + 1
     ids = torch.where(alpha[0, :, :, 0] >= .2, ids, 0)
     depth = torch.where(ids > 0, image[0, :, :, -1], 0)
+    torch.cuda.synchronize()
+    postprocess_s = time.perf_counter() - started
+    started = time.perf_counter()
     ids_cpu = ids.cpu().numpy().astype(np.uint16)
     depth_cpu = (depth.cpu().numpy() * 1000).clip(0, 65535).astype(np.uint16)
     readback_s = time.perf_counter() - started
     Image.fromarray(ids_cpu).save(output / "instance_id.png")
     Image.fromarray(depth_cpu).save(output / "depth.png")
+    preview = np.zeros((280, 504, 3), dtype=np.uint8)
+    preview[ids_cpu == 1] = (145, 151, 142)
+    preview[ids_cpu == 2] = (244, 153, 55)
+    preview[ids_cpu == 3] = (58, 166, 105)
+    Image.fromarray(preview, "RGB").save(output / "proxy_rgb.png")
     write_s = time.perf_counter() - started - readback_s
     result = {"schema": 1, "scope": "synthetic gsplat extension startup, not PWM scene",
               "gsplat": getattr(gsplat, "__version__", "unknown"),
@@ -62,7 +70,8 @@ def run(output, frames):
               "image_wh": [504, 280], "gaussians": 3,
               "import_s": import_time_s, "first_render_s": first_s,
               "steady_median_ms": statistics.median(samples) * 1000,
-              "readback_ms": readback_s * 1000, "two_png_write_ms": write_s * 1000}
+              "gpu_postprocess_ms": postprocess_s * 1000,
+              "readback_ms": readback_s * 1000, "three_png_write_ms": write_s * 1000}
     (output / "measurements.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     return result
 

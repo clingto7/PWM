@@ -197,6 +197,32 @@ physics contract hashes it, and the checker compares it with the run record.
 and state transitions; `first_image_stages.py` calls the raster renderer, while
 `first_image_pipeline.py` coordinates stage calls and writes provenance.
 
+## Physics performance probes
+
+Each saved-scene run writes `physics_profile.json`. Its disjoint `timings_s`
+separate world creation, fit trial, case and replay stepping, state reads,
+contact queries, trajectory writes, and remaining overhead. The wall creation
+subtotal is nested within world creation. The physics stage contract hashes
+this profile alongside the trajectories and contact record.
+
+The following optional, saved-scene probes do not change production solver
+settings. Run them from `experiments/skeleton` in an environment with their
+respective engines installed:
+
+```sh
+python benchmark_physics.py RUN_DIR --output OUTPUT.json --substep-sweep --all-actions
+python benchmark_engines.py RUN_DIR --output OUTPUT.json
+python benchmark_saved_engines.py RUN_DIR --output OUTPUT.json --substeps 8
+```
+
+`benchmark_physics.py` sweeps PyBullet parameters and collision geometry.
+`benchmark_engines.py` compares PyBullet, MuJoCo and SAPIEN on a common box
+proxy. `benchmark_saved_engines.py` compares PyBullet with SAPIEN PhysX CPU on
+the saved support, obstacle, boundary and dynamic-hull geometry. PhysX cooks
+the dynamic hull, so its output records the cooked vertex count and sampled
+support error. Treat these timings and trajectory comparisons as measurements
+for the saved scene, not as a general solver ranking.
+
 # Ticket 16: original-image observation
 
 `observation.py` accepts an original screenshot and emits checked depth,
